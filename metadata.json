@@ -1,0 +1,7 @@
+{
+  "name": "CMBI - Corpus Lab",
+  "description": "Corpus Multifuente Bilingüe Inteligente: A multimodal linguistic laboratory for English-Spanish corpus creation, analysis, and AI-driven inquiry.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
