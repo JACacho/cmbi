@@ -17,7 +17,9 @@ export enum SourceType {
   ACADEMIC = 'Google Scholar/Academic',
   YOUTUBE = 'YouTube Transcript',
   SOCIAL = 'Social Media/Forum',
-  CLASSROOM = 'Google Classroom'
+  CLASSROOM = 'Google Classroom',
+  GENERATED = 'AI Generated (Augmentation)',
+  SEGMENT = 'Document Segment'
 }
 
 export type SentimentLabel = 'Positive' | 'Negative' | 'Neutral';
@@ -27,8 +29,20 @@ export interface SentimentResult {
   label: SentimentLabel;
 }
 
+export interface PosBreakdown {
+  nouns: number;
+  verbs: number;
+  adjectives: number;
+  adverbs: number;
+  pronouns: number;
+  determiners: number; // Articles included
+  conjunctions: number;
+  others: number;
+}
+
 export interface CorpusDocument {
   id: string;
+  parallelId?: string; // Tracks ID of translated counterpart
   title: string;
   content: string; // The raw text or transcribed text
   language: Language;
@@ -40,6 +54,7 @@ export interface CorpusDocument {
   author?: string;
   sourceUrl?: string;
   sentiment?: SentimentResult;
+  posData?: PosBreakdown; // Added for automated grammar storage
 }
 
 export interface KwicResult {
@@ -62,21 +77,11 @@ export interface GlossaryItem {
   targetDefinition: string; // Definition in target language (for translation purposes)
   synonyms: string[];
   example: string;
+  referenceUrl?: string; // Real URL for consultation
 }
 
 export interface ChatMessage {
   role: 'user' | 'model';
   content: string;
   timestamp: number;
-}
-
-export interface PosBreakdown {
-  nouns: number;
-  verbs: number;
-  adjectives: number;
-  adverbs: number;
-  pronouns: number;
-  determiners: number; // Articles included
-  conjunctions: number;
-  others: number;
 }

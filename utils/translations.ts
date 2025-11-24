@@ -1,4 +1,6 @@
 
+
+
 export const translations = {
   EN: {
     // Sidebar
@@ -38,9 +40,12 @@ export const translations = {
     uploadComplete: "Upload complete.",
     transcriptionComplete: "Processing complete.",
     error: "Error processing file.",
-    selectFile: "Select File",
+    selectFile: "Select Files",
+    selectFolder: "Upload Folder",
     textLabel: "Text/Docs",
     mediaLabel: "Audio/Video/Img",
+    categoryLabel: "Tag content as...",
+    catSocial: "Social Media (FB, X, Insta)",
 
     // Corpus Builder
     agentTitle: "Corpus Agent",
@@ -165,8 +170,11 @@ export const translations = {
     transcriptionComplete: "Procesamiento completo.",
     error: "Error procesando archivo.",
     selectFile: "Seleccionar Archivo",
+    selectFolder: "Subir Carpeta",
     textLabel: "Texto/Docs",
     mediaLabel: "Audio/Video/Img",
+    categoryLabel: "Etiquetar contenido como...",
+    catSocial: "Redes Sociales (FB, X, Insta)",
 
     // Corpus Builder
     agentTitle: "Agente de Corpus",

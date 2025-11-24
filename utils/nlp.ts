@@ -1,10 +1,11 @@
+
 import { CorpusDocument, KwicResult, TokenFrequency, Language, SentimentResult } from '../types';
 
 // Clean text from AI artifacts, markdown, and meta headers specifically requested
 export const cleanCorpusText = (text: string): string => {
   return text
     .replace(/\*\*/g, '') // Remove bold markdown
-    .replace(/#{1,6}\s/g, '') // Remove heading markers if desired, or keep them for structure. User asked to remove 'Title:'.
+    .replace(/#{1,6}\s/g, '') // Remove heading markers if desired
     .replace(/^(Title:|Subject:|Here is a text|Video:|Assignment:|Student:|Date:|Instruction:).+$/gim, '') // Remove meta headers lines
     .replace(/(Write a .*|Here is the .*|Please generate .*)/gi, '') // Remove common AI prompts included in text
     .replace(/\[.*?\]/g, '') // Remove placeholders like [Student Name]
@@ -14,21 +15,81 @@ export const cleanCorpusText = (text: string): string => {
     .trim();
 };
 
+export const STOPWORDS = {
+  EN: new Set(['the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'i', 'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at', 'this', 'but', 'his', 'by', 'from', 'they', 'we', 'say', 'her', 'she', 'or', 'an', 'will', 'my', 'one', 'all', 'would', 'there', 'their', 'what', 'so', 'up', 'out', 'if', 'about', 'who', 'get', 'which', 'go', 'me']),
+  ES: new Set(['de', 'la', 'que', 'el', 'en', 'y', 'a', 'los', 'del', 'se', 'las', 'por', 'un', 'para', 'con', 'no', 'una', 'su', 'al', 'lo', 'como', 'más', 'pero', 'sus', 'le', 'ya', 'o', 'este', 'sí', 'porque', 'esta', 'entre', 'cuando', 'muy', 'sin', 'sobre', 'también', 'me', 'hasta', 'hay', 'donde', 'quien', 'desde', 'todo', 'nos'])
+};
+
 // Basic tokenizer that handles English and Spanish basic punctuation
-export const tokenize = (text: string): string[] => {
-  return text.toLowerCase()
+export const tokenize = (text: string, removeStopwords: boolean = false, lang: Language = Language.ENGLISH): string[] => {
+  let tokens = text.toLowerCase()
     .replace(/[.,/#!$%^&*;:{}=\-_`~()"\u201C\u201D\u00AB\u00BB]/g, "") // Include quotes
     .replace(/\s{2,}/g, " ")
     .split(" ")
     .filter(t => t.length > 0);
+
+  if (removeStopwords) {
+    const set = lang === Language.SPANISH ? STOPWORDS.ES : STOPWORDS.EN;
+    tokens = tokens.filter(t => !set.has(t));
+  }
+  
+  return tokens;
 };
 
-export const calculateFrequencies = (docs: CorpusDocument[]): TokenFrequency[] => {
+export const generateNgrams = (tokens: string[], n: number): TokenFrequency[] => {
+  if (tokens.length < n) return [];
+  
+  const frequencyMap: Record<string, number> = {};
+  
+  for (let i = 0; i < tokens.length - n + 1; i++) {
+    const gram = tokens.slice(i, i + n).join(" ");
+    frequencyMap[gram] = (frequencyMap[gram] || 0) + 1;
+  }
+
+  const totalNgrams = tokens.length - n + 1;
+
+  return Object.entries(frequencyMap)
+    .map(([token, count]) => ({
+      token,
+      count,
+      frequency: count / totalNgrams
+    }))
+    .sort((a, b) => b.count - a.count);
+};
+
+// Split text into logical segments to robustify corpus
+export const splitIntoChunks = (text: string, minLength: number = 100): string[] => {
+  // Split by double newline (paragraphs)
+  const paragraphs = text.split(/\n\s*\n/);
+  const chunks: string[] = [];
+  let currentChunk = "";
+
+  paragraphs.forEach(para => {
+      const cleanPara = para.trim();
+      if (cleanPara.length === 0) return;
+
+      if ((currentChunk.length + cleanPara.length) < 1000) {
+          currentChunk += cleanPara + "\n\n";
+      } else {
+          if (currentChunk.length > minLength) chunks.push(currentChunk.trim());
+          currentChunk = cleanPara + "\n\n";
+      }
+  });
+
+  if (currentChunk.length > minLength) chunks.push(currentChunk.trim());
+  
+  // If text was too short to split but is valid, return as one chunk
+  if (chunks.length === 0 && text.length > 0) return [text];
+
+  return chunks;
+};
+
+export const calculateFrequencies = (docs: CorpusDocument[], removeStopwords: boolean = false): TokenFrequency[] => {
   const frequencyMap: Record<string, number> = {};
   let totalTokens = 0;
 
   docs.forEach(doc => {
-    const tokens = tokenize(doc.content);
+    const tokens = tokenize(doc.content, removeStopwords, doc.language);
     totalTokens += tokens.length;
     tokens.forEach(token => {
       frequencyMap[token] = (frequencyMap[token] || 0) + 1;
@@ -39,7 +100,7 @@ export const calculateFrequencies = (docs: CorpusDocument[]): TokenFrequency[] =
     .map(([token, count]) => ({
       token,
       count,
-      frequency: count / totalTokens
+      frequency: totalTokens > 0 ? count / totalTokens : 0
     }))
     .sort((a, b) => b.count - a.count);
 };
@@ -50,14 +111,11 @@ export const generateKwic = (docs: CorpusDocument[], keyword: string, windowSize
 
   docs.forEach(doc => {
     const text = doc.content;
-    // Simple token-based check to avoid partial word matches usually requires regex, 
-    // but substring search is faster for real-time. We will add spaces for boundary check.
     const lowerText = text.toLowerCase();
     let startIndex = 0;
     let index = lowerText.indexOf(normalizedKeyword, startIndex);
 
     while (index !== -1) {
-      // Basic word boundary check (start or space before, end or space/punct after)
       const charBefore = index > 0 ? lowerText[index - 1] : ' ';
       const charAfter = index + keyword.length < lowerText.length ? lowerText[index + keyword.length] : ' ';
       

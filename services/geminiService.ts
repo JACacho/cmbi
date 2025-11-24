@@ -22,13 +22,85 @@ export const transcribeMedia = async (base64Data: string, mimeType: string): Pro
           },
         },
         {
-          text: "Extract the text from this file. If it is audio/video, transcribe it. If it is an image/PDF, perform OCR. Provide ONLY the text content. Maintain the original layout if possible.",
+          text: "Analyze this document/image. Extract ALL text content. Preserve the visual structure in the text output by using headers, lists, and spacing. If it is a poster or infographic, describe the layout briefly then list all text.",
         },
       ],
     },
   });
 
-  return cleanCorpusText(response.text || "");
+  return response.text || ""; 
+};
+
+export const fetchContentFromUrl = async (url: string): Promise<{ title: string, content: string }> => {
+  const ai = getAIClient();
+
+  // 1. Initial Attempt: Direct Visit
+  let response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: `Please visit the following URL: ${url}. 
+    
+    Instructions:
+    1. Extract the MAIN Title of the page.
+    2. Extract the FULL text content. Do NOT summarize. Get every paragraph, header, and list item.
+    3. If it is a long article or paper, retrieve the entire body.
+    4. Ignore navigation bars, footer copyrights, and advertisements.
+    5. Return the result in this specific format:
+    
+    Title: [The Title]
+    Content: [The Full Content HTML-like structure or Markdown]`,
+    config: {
+      tools: [{ googleSearch: {} }],
+    },
+  });
+
+  let text = response.text || "";
+  
+  let titleMatch = text.match(/Title:\s*(.+)/);
+  let contentMatch = text.match(/Content:\s*([\s\S]+)/);
+
+  let title = titleMatch ? titleMatch[1].trim() : "Web Page Import";
+  let content = contentMatch ? contentMatch[1].trim() : text.replace(/Title:.*\n/, '');
+
+  // 2. Quality Check
+  // Detect if the fetch was blocked (e.g., CAPTCHA, Paywall, Short Error Message)
+  const isPoorQuality = content.length < 500 || 
+                        /access denied|robot check|captcha|please verify|enable javascript|403 forbidden|404 not found/i.test(content);
+
+  if (isPoorQuality) {
+      // 3. Fallback: Academic/Reliable Source Search
+      // If direct access fails, try to find the content via academic repositories using the URL as a key reference.
+      const fallbackResponse = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: `The direct access to the URL (${url}) failed or was restricted.
+        
+        Task:
+        1. Identify the likely Academic Paper, Article, or Topic associated with this URL.
+        2. Search for this specific content on reliable academic repositories (e.g., arXiv, Springer, IEEE, PubMed, ResearchGate, Semantic Scholar).
+        3. Retrieve the full abstract and as much of the body text as possible from these accessible sources.
+        
+        Return the result in this format:
+        Title: [Correct Academic Title]
+        Content: [The retrieved content/abstract/summary from academic sources]`,
+        config: {
+            tools: [{ googleSearch: {} }],
+        }
+      });
+
+      const fbText = fallbackResponse.text || "";
+      const fbTitleMatch = fbText.match(/Title:\s*(.+)/);
+      const fbContentMatch = fbText.match(/Content:\s*([\s\S]+)/);
+
+      // Only swap if fallback found substantial content
+      if (fbContentMatch && fbContentMatch[1].trim().length > content.length) {
+          title = fbTitleMatch ? fbTitleMatch[1].trim() : title;
+          content = fbContentMatch[1].trim();
+      }
+  }
+
+  return {
+    title,
+    content: content 
+  };
 };
 
 export const askCorpusQuestion = async (
@@ -55,22 +127,32 @@ export const askCorpusQuestion = async (
   return response.text || "I could not generate a response.";
 };
 
-export const generateGlossary = async (contextText: string): Promise<GlossaryItem[]> => {
+export const generateGlossary = async (contextText: string, targetLang: Language = Language.SPANISH): Promise<GlossaryItem[]> => {
   const ai = getAIClient();
   
-  // Limit context to prevent token overflow and model confusion
-  const truncatedContext = contextText.substring(0, 25000);
+  // Use Flash for speed, prioritize quantity and format
+  const truncatedContext = contextText.substring(0, 40000);
+  const targetLangName = targetLang === Language.SPANISH ? "Spanish" : "English";
 
-  const prompt = `Analyze the following text and extract 15-20 key distinct specialized terms. 
-  For each term, provide a JSON object.
-  CRITICAL: Keep "definition" and "example" CONCISE (max 30 words each) to ensure the JSON fits in the response limit.
-  Do not repeat terms.
+  const prompt = `Task: Create a specialized bilingual glossary from the text provided.
   
-  Return ONLY a JSON array.`;
+  CRITICAL INSTRUCTIONS:
+  1. Detect the dominant language of the source text.
+  2. Extract AT LEAST 15 specialized, technical, or academic terms found in the text.
+  3. If the source text is Spanish, the 'term' MUST be in Spanish. If English, 'term' is English.
+  4. 'translation' must be in ${targetLangName}.
+  5. 'definition' must be in the SOURCE language.
+  6. 'targetDefinition' must be in ${targetLangName}.
+  7. Provide 2-3 synonyms in ${targetLangName}.
+  8. Provide a real URL for reference.
+  
+  If the text is short, extract as many distinct nouns/verbs as possible to fill the list.
+  
+  Return a valid JSON array.`;
 
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash',
-    contents: `Text:\n${truncatedContext}\n\n${prompt}`,
+    contents: `Text Context:\n${truncatedContext}\n\n${prompt}`,
     config: {
       responseMimeType: "application/json",
       responseSchema: {
@@ -83,41 +165,37 @@ export const generateGlossary = async (contextText: string): Promise<GlossaryIte
             definition: { type: Type.STRING },
             targetDefinition: { type: Type.STRING },
             synonyms: { type: Type.ARRAY, items: { type: Type.STRING } },
-            example: { type: Type.STRING }
+            example: { type: Type.STRING },
+            referenceUrl: { type: Type.STRING }
           }
         }
       }
     }
   });
 
-  let jsonString = response.text || "[]";
-  
-  // Cleanup Markdown if present
-  if (jsonString.startsWith("```json")) {
-      jsonString = jsonString.replace(/^```json\s*/, "").replace(/```$/, "");
-  } else if (jsonString.startsWith("```")) {
-      jsonString = jsonString.replace(/^```\s*/, "").replace(/```$/, "");
-  }
-
   try {
-    return JSON.parse(jsonString);
-  } catch (e) {
-    console.error("Failed to parse glossary JSON", e);
-    // Attempt to salvage valid JSON array if truncated
-    try {
-        const lastEndObject = jsonString.lastIndexOf("}");
-        if (lastEndObject !== -1) {
-            const salvaged = jsonString.substring(0, lastEndObject + 1) + "]";
-            return JSON.parse(salvaged);
-        }
-    } catch (e2) {
-        console.error("JSON salvage failed", e2);
+    const jsonStr = response.text || "[]";
+    const result = JSON.parse(jsonStr);
+    
+    if (Array.isArray(result)) {
+        return result.map((item: any) => ({
+            term: item.term || "Unknown",
+            translation: item.translation || "",
+            definition: item.definition || "",
+            targetDefinition: item.targetDefinition || "",
+            synonyms: Array.isArray(item.synonyms) ? item.synonyms : [],
+            example: item.example || "",
+            referenceUrl: item.referenceUrl || ""
+        }));
     }
+    return [];
+  } catch (e) {
+    console.error("Glossary JSON error", e);
     return [];
   }
 };
 
-// --- Professional Translator Service ---
+// --- Professional Translator & Layout Engine Service ---
 
 export const detectTopic = async (text: string): Promise<string> => {
     const ai = getAIClient();
@@ -135,26 +213,30 @@ export const translateProfessional = async (
     const ai = getAIClient();
     const langName = targetLang === Language.SPANISH ? "Spanish" : "English";
 
+    const systemInstruction = `You are a high-fidelity "Parallel Transfer" Localization Engine. 
+    Your task is to translate the text content of the provided HTML document into ${langName} while preserving the DOM structure with bit-perfect accuracy.
+
+    CRITICAL STRUCTURAL RULES:
+    1. **Immutable Structure**: Do NOT add, remove, or reorder ANY HTML tags.
+    2. **Immutable Attributes**: Do NOT touch classes, IDs, or styles.
+    3. **Content Only**: Only translate the *visible text nodes*.
+    
+    Output ONLY the valid HTML string.`;
+
     const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        config: {
-            systemInstruction: `You are a professional senior translator and editor. 
-            Translate the provided text into ${langName}. 
-            CRITICAL: 
-            1. Maintain the exact original layout, markdown formatting, bullet points, and paragraph structure.
-            2. Maintain the original register, tone, and style.
-            3. Ensure the translation is natural and culturally appropriate.
-            4. Output ONLY the translated text, no preamble.`
-        },
+        model: 'gemini-2.5-flash', // Switched to Flash for speed as requested
+        config: { systemInstruction },
         contents: content
     });
 
-    return response.text || "";
+    let html = response.text || "";
+    html = html.replace(/^```html\s*/, "").replace(/^```\s*/, "").replace(/```$/, "");
+    return html;
 };
 
 // --- Corpus Builder Service ---
 
-interface SyntheticDoc {
+export interface SyntheticDoc {
   title: string;
   content: string;
   sourceType: SourceType;
@@ -162,120 +244,18 @@ interface SyntheticDoc {
   language: Language;
   author: string;
   url: string;
+  date: string;
+  posData?: PosBreakdown; // Included directly
 }
-
-export const generateSyntheticCorpusData = async (
-  topic: string,
-  sourceType: SourceType,
-  language: Language
-): Promise<SyntheticDoc> => {
-  const ai = getAIClient();
-
-  let systemInstruction = "";
-  let prompt = "";
-
-  const langName = language === Language.SPANISH ? "Spanish" : "English";
-
-  switch (sourceType) {
-    case SourceType.ACADEMIC:
-      systemInstruction = "You are a specialized academic search engine retrieval system.";
-      prompt = `Generate a detailed, realistic EXCERPT from an Academic Paper or Journal Article about "${topic}" in ${langName}.
-      Include a realistic Title, Date (recent), and content that uses formal, academic register. 
-      The content should be around 300-500 words.`;
-      break;
-    case SourceType.YOUTUBE:
-      systemInstruction = "You are a YouTube transcription bot.";
-      prompt = `Generate a realistic TRANSCRIPT of an educational YouTube video about "${topic}" in ${langName}.
-      Title: [Video Title].
-      Style: Oral, spontaneous, slightly informal but educational. Include time stamps.`;
-      break;
-    case SourceType.SOCIAL:
-      systemInstruction = "You are a social media scraper.";
-      prompt = `Generate a realistic Reddit Thread or detailed Forum Discussion about "${topic}" in ${langName}.
-      Style: Informal, internet slang, opinions, debates.`;
-      break;
-    default:
-      prompt = `Write a text about ${topic} in ${langName}.`;
-  }
-
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
-    config: { systemInstruction },
-    contents: prompt
-  });
-
-  const text = cleanCorpusText(response.text || "");
-  
-  const titleMatch = text.match(/^(Title:|Subject:|Video:)?\s*(.+)$/m);
-  const title = titleMatch ? titleMatch[2].trim() : `${sourceType} - ${topic}`;
-
-  // Generate fake metadata for realism
-  const author = sourceType === SourceType.ACADEMIC ? "Dr. A. Scholar" : (sourceType === SourceType.YOUTUBE ? "EduChannel" : "User123");
-  const url = sourceType === SourceType.ACADEMIC ? "https://scholar.google.com/article?id=123" : "https://youtube.com/watch?v=xyz";
-
-  return {
-    title: title.substring(0, 50),
-    content: text,
-    sourceType,
-    docType: sourceType === SourceType.ACADEMIC ? DocumentType.TEXT : (sourceType === SourceType.YOUTUBE ? DocumentType.VIDEO : DocumentType.TEXT),
-    language,
-    author,
-    url
-  };
-};
-
-// --- Classroom Simulator ---
-
-export const simulateClassroomFetch = async (folderUrl: string, taskName: string): Promise<SyntheticDoc[]> => {
-    const ai = getAIClient();
-    const count = 20; // Enforced 20
-    const results: SyntheticDoc[] = [];
-    
-    const topics = ['Arte Culinario (Culinary Arts)', 'Curaduría y Museografía (Museography)', 'Diseño Textil y Modas (Fashion)'];
-
-    for (let i = 0; i < count; i++) {
-        const specificTopic = topics[i % topics.length];
-        
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: `Write a student essay (approx 200 words) for the task: "${taskName}". 
-            Sub-topic: ${specificTopic}.
-            Simulated Source: "${folderUrl}".
-            Language: Spanish or English (randomly).
-            Include typical student grammar errors.
-            Do NOT include meta headers like 'Title:'. Just start the essay text.
-            Make it sound authentic.`
-        });
-        
-        const text = cleanCorpusText(response.text || "");
-        const firstLine = text.split('\n')[0];
-        const title = firstLine.length < 50 ? firstLine : `Assignment ${i+1} - ${specificTopic}`;
-        
-        results.push({
-            title: title,
-            content: text,
-            sourceType: SourceType.CLASSROOM,
-            docType: DocumentType.TEXT,
-            language: i % 2 === 0 ? Language.ENGLISH : Language.SPANISH,
-            author: `Student ${i+1}`,
-            url: folderUrl
-        });
-    }
-    return results;
-};
-
-// --- Grammatical Analysis ---
 
 export const analyzePosDistribution = async (text: string): Promise<PosBreakdown> => {
   const ai = getAIClient();
-  const truncatedText = text.substring(0, 20000); 
+  // Optimized: Smaller chunk for faster POS tagging
+  const truncatedText = text.substring(0, 5000); 
 
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash',
-    contents: `Analyze the grammatical categories in this text. Return a JSON object with the approximate percentage (0-100, integer) of:
-    nouns, verbs, adjectives, adverbs, pronouns, determiners, conjunctions, others.
-    
-    Text Sample: "${truncatedText}"`,
+    contents: `Analyze grammatical categories. Return JSON integers (percentage 0-100) for: nouns, verbs, adjectives, adverbs, pronouns, determiners, conjunctions, others. Text: "${truncatedText}"`,
     config: {
       responseMimeType: "application/json",
       responseSchema: {
@@ -299,4 +279,94 @@ export const analyzePosDistribution = async (text: string): Promise<PosBreakdown
   } catch (e) {
     return { nouns: 0, verbs: 0, adjectives: 0, adverbs: 0, pronouns: 0, determiners: 0, conjunctions: 0, others: 0 };
   }
+};
+
+export const generateSyntheticCorpusData = async (
+  topic: string,
+  sourceType: SourceType,
+  language: Language
+): Promise<SyntheticDoc> => {
+  const ai = getAIClient();
+
+  let systemInstruction = "";
+  let prompt = "";
+  let tools: any[] = [];
+  
+  const langName = language === Language.SPANISH ? "Spanish" : "English";
+
+  if (sourceType === SourceType.SOCIAL) {
+      systemInstruction = "You are a social media archivist. Capture REAL-TIME usage, slang, and sentiment.";
+      prompt = `Generate a collection of 5-10 realistic social media posts (Tweets, Reddit threads, FB comments) about "${topic}" in ${langName}.
+      
+      Instructions:
+      1. Search for CURRENT sentiment/news on this topic using Google Search.
+      2. If search returns results, use them to create authentic posts with dates/handles.
+      3. If search fails, SYNTHESIZE highly realistic tweets/posts mimicking today's style (short, emojis, hashtags).
+      4. DO NOT FAIL. Always return text formatted as social media posts.
+      5. Include a mix of platforms (X, Instagram captions, Telegram messages).`;
+      
+      tools = [{googleSearch: {}}];
+  } else if (sourceType === SourceType.YOUTUBE) {
+      systemInstruction = "You are a YouTube transcription bot.";
+      prompt = `Generate a TRANSCRIPT of a video about "${topic}" in ${langName}. Include timestamps. Style: Spoken, informal/educational.`;
+  } else {
+      systemInstruction = "You are an academic retrieval system.";
+      prompt = `Generate an Academic Paper excerpt about "${topic}" in ${langName}. Formal register. Include Abstract and Introduction.`;
+  }
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash',
+    config: { 
+        systemInstruction,
+        tools: tools.length > 0 ? tools : undefined
+    },
+    contents: prompt
+  });
+
+  const text = cleanCorpusText(response.text || "");
+  const titleMatch = text.match(/^(Title:|Subject:|Video:)?\s*(.+)$/m);
+  const title = titleMatch ? titleMatch[2].trim().substring(0, 50) : `${sourceType} - ${topic}`;
+  
+  // OPTIMIZATION: Calculate Grammar concurrently with generation return
+  // We do it here so the doc arrives "fully baked"
+  const posData = await analyzePosDistribution(text);
+
+  return {
+    title,
+    content: text,
+    sourceType,
+    docType: sourceType === SourceType.YOUTUBE ? DocumentType.VIDEO : DocumentType.TEXT,
+    language,
+    author: sourceType === SourceType.ACADEMIC ? "Dr. AI Scholar" : "Netizen_User",
+    url: "https://generated.source",
+    date: new Date().toLocaleDateString(),
+    posData
+  };
+};
+
+export const simulateClassroomFetch = async (folderUrl: string, taskName: string): Promise<SyntheticDoc[]> => {
+    const ai = getAIClient();
+    const count = 5; 
+    const results: SyntheticDoc[] = [];
+    
+    for (let i = 0; i < count; i++) {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: `Write a short student essay (150 words) for task: "${taskName}". Language: Spanish or English. Authentically imperfect.`
+        });
+        
+        const text = cleanCorpusText(response.text || "");
+        results.push({
+            title: `Student Work ${i+1}`,
+            content: text,
+            sourceType: SourceType.CLASSROOM,
+            docType: DocumentType.TEXT,
+            language: i % 2 === 0 ? Language.ENGLISH : Language.SPANISH,
+            author: `Student ${i+1}`,
+            url: folderUrl,
+            date: new Date().toLocaleDateString(),
+            posData: await analyzePosDistribution(text)
+        });
+    }
+    return results;
 };
