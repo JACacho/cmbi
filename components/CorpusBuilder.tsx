@@ -139,12 +139,12 @@ export const CorpusBuilder: React.FC<CorpusBuilderProps> = ({ onDocsGenerated, u
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">{t.topicLabel}</label>
-              <input type="text" value={topic} onChange={(e) => setTopic(e.target.value)} disabled={isBuilding} placeholder={t.topicPlaceholder} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500" />
+              <input type="text" value={topic} onChange={(e) => setTopic(e.target.value)} disabled={isBuilding} placeholder={t.topicPlaceholder} className="w-full px-3 py-2 border border-slate-300 rounded-md" />
             </div>
 
             <div>
                <label className="block text-sm font-medium text-slate-700 mb-1">{t.sizeLabel}: {count} docs</label>
-               <input type="range" min="3" max="100" value={count} onChange={(e) => setCount(parseInt(e.target.value))} disabled={isBuilding} className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600" />
+               <input type="range" min="3" max="100" value={count} onChange={(e) => setCount(parseInt(e.target.value))} disabled={isBuilding} className="w-full h-2 bg-slate-200 rounded-lg" />
                <div className="flex justify-between text-xs text-slate-400 mt-1"><span>3</span><span>50</span><span>100</span></div>
             </div>
 
@@ -152,11 +152,11 @@ export const CorpusBuilder: React.FC<CorpusBuilderProps> = ({ onDocsGenerated, u
                <label className="block text-sm font-medium text-slate-700 mb-2">{t.langLabel}</label>
                <div className="flex gap-4">
                   <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={selectedLangs.includes(Language.ENGLISH)} onChange={() => handleLangToggle(Language.ENGLISH)} disabled={isBuilding} className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500" />
+                    <input type="checkbox" checked={selectedLangs.includes(Language.ENGLISH)} onChange={() => handleLangToggle(Language.ENGLISH)} disabled={isBuilding} className="w-4 h-4 text-indigo-600" />
                     <span className="text-sm text-slate-600">English</span>
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={selectedLangs.includes(Language.SPANISH)} onChange={() => handleLangToggle(Language.SPANISH)} disabled={isBuilding} className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500" />
+                    <input type="checkbox" checked={selectedLangs.includes(Language.SPANISH)} onChange={() => handleLangToggle(Language.SPANISH)} disabled={isBuilding} className="w-4 h-4 text-indigo-600" />
                     <span className="text-sm text-slate-600">Español</span>
                   </label>
                </div>
@@ -166,15 +166,15 @@ export const CorpusBuilder: React.FC<CorpusBuilderProps> = ({ onDocsGenerated, u
                 <label className="block text-sm font-medium text-slate-700 mb-2">{t.sourcesLabel}</label>
                 <div className="space-y-2">
                     <label className="flex items-center gap-2 cursor-pointer bg-slate-50 p-2 rounded border border-slate-100 hover:bg-slate-100 transition-colors">
-                        <input type="checkbox" checked={selectedSources.includes(SourceType.ACADEMIC)} onChange={() => handleSourceToggle(SourceType.ACADEMIC)} disabled={isBuilding} className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500" />
+                        <input type="checkbox" checked={selectedSources.includes(SourceType.ACADEMIC)} onChange={() => handleSourceToggle(SourceType.ACADEMIC)} disabled={isBuilding} className="w-4 h-4" />
                         <div className="flex items-center gap-2 text-sm text-slate-700"><BookOpen className="w-4 h-4 text-emerald-600" /> <span>Academic / Scholar</span></div>
                     </label>
                     <label className="flex items-center gap-2 cursor-pointer bg-slate-50 p-2 rounded border border-slate-100 hover:bg-slate-100 transition-colors">
-                        <input type="checkbox" checked={selectedSources.includes(SourceType.YOUTUBE)} onChange={() => handleSourceToggle(SourceType.YOUTUBE)} disabled={isBuilding} className="w-4 h-4 text-red-600 rounded focus:ring-red-500" />
+                        <input type="checkbox" checked={selectedSources.includes(SourceType.YOUTUBE)} onChange={() => handleSourceToggle(SourceType.YOUTUBE)} disabled={isBuilding} className="w-4 h-4" />
                         <div className="flex items-center gap-2 text-sm text-slate-700"><Youtube className="w-4 h-4 text-red-600" /> <span>YouTube Transcripts</span></div>
                     </label>
                     <label className="flex items-center gap-2 cursor-pointer bg-slate-50 p-2 rounded border border-slate-100 hover:bg-slate-100 transition-colors">
-                        <input type="checkbox" checked={selectedSources.includes(SourceType.SOCIAL)} onChange={() => handleSourceToggle(SourceType.SOCIAL)} disabled={isBuilding} className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500" />
+                        <input type="checkbox" checked={selectedSources.includes(SourceType.SOCIAL)} onChange={() => handleSourceToggle(SourceType.SOCIAL)} disabled={isBuilding} className="w-4 h-4" />
                         <div className="flex items-center gap-2 text-sm text-slate-700"><Share2 className="w-4 h-4 text-blue-600" /> <span>Social Media (FB, X, Telegram)</span></div>
                     </label>
                 </div>
@@ -182,11 +182,12 @@ export const CorpusBuilder: React.FC<CorpusBuilderProps> = ({ onDocsGenerated, u
 
             <div className="pt-4 border-t border-slate-100">
                 {!isBuilding ? (
-                    <button onClick={startBuild} className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2.5 rounded-lg transition-colors shadow-sm"><Play className="w-4 h-4" /> {t.startBtn}</button>
+                    <button onClick={startBuild} className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2.5 rounded-lg transition-colors"><Play className="w-4 h-4" /> {t.startButton}</button>
                 ) : (
-                    <button onClick={stopBuild} className="w-full flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-medium py-2.5 rounded-lg transition-colors"><StopCircle className="w-4 h-4" /> {t.stopBtn}</button>
+                    <button onClick={stopBuild} className="w-full flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-medium py-2.5 rounded-lg"><StopCircle className="w-4 h-4" /> {t.stopButton}</button>
                 )}
             </div>
+          </div>
         </div>
       </div>
 
@@ -212,7 +213,15 @@ export const CorpusBuilder: React.FC<CorpusBuilderProps> = ({ onDocsGenerated, u
                 <span className="text-slate-400 text-xs ml-2">cmbi-agent --verbose --grammar=auto --social=active</span>
             </div>
             <div className="flex-1 p-4 overflow-y-auto space-y-1 text-green-400">
-                {logs.length === 0 ? <span className="text-slate-600 opacity-50">{t.waiting}</span> : logs.map((log, idx) => (<div key={idx} className="break-words"><span className="text-slate-500 mr-2">$</span>{log}</div>))}
+                {logs.length === 0 ? (
+                  <span className="text-slate-600 opacity-50">{t.waiting}</span>
+                ) : (
+                  logs.map((log, idx) => (
+                    <div key={idx} className="break-words">
+                      <span className="text-slate-50">{log}</span>
+                    </div>
+                  ))
+                )}
                 <div ref={logsEndRef} />
             </div>
           </div>
