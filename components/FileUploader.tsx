@@ -9,9 +9,11 @@ import { cleanCorpusText } from '../utils/nlp';
 import * as XLSX from 'xlsx';
 // @ts-ignore
 import JSZip from 'jszip';
+// @ts-ignore
+import mammoth from 'mammoth';
 
 interface FileUploaderProps {
-  onUpload: (title: string, content: string, type: DocumentType, lang: Language, source?: SourceType) => void;
+  onUpload: (title: string, content: string, type: DocumentType, lang: Language, source?: SourceType, media?: string) => void;
   uiLang: 'EN' | 'ES';
 }
 
@@ -124,14 +126,16 @@ const FileUploader: React.FC<FileUploaderProps> = ({ onUpload, uiLang }) => {
         if (fileType.startsWith('video')) docType = DocumentType.VIDEO;
         
         const transcript = await transcribeMedia(base64, fileType || 'application/pdf');
-        onUpload(displayTitle, transcript, docType, detectLanguage(transcript), selectedSourceType);
+        
+        // Construct data URI for preview
+        const mediaData = `data:${fileType};base64,${base64}`;
+        
+        onUpload(displayTitle, transcript, docType, detectLanguage(transcript), selectedSourceType, mediaData);
       
       // 5. Handle DOCX via Mammoth
       } else if (originalName.endsWith('.docx')) {
            const arrayBuffer = await file.arrayBuffer();
-           // @ts-ignore
            if (typeof mammoth !== 'undefined') {
-               // @ts-ignore
                const result = await mammoth.extractRawText({ arrayBuffer });
                const cleaned = cleanCorpusText(result.value);
                onUpload(displayTitle, cleaned, DocumentType.TEXT, detectLanguage(cleaned), selectedSourceType);
@@ -165,9 +169,7 @@ const FileUploader: React.FC<FileUploaderProps> = ({ onUpload, uiLang }) => {
                       processedCount++;
                   } else if (filename.match(/\.(docx)$/i)) {
                        const arrayBuffer = await zipEntry.async("arraybuffer");
-                       // @ts-ignore
                        if (typeof mammoth !== 'undefined') {
-                           // @ts-ignore
                            const result = await mammoth.extractRawText({ arrayBuffer });
                            const cleaned = cleanCorpusText(result.value);
                            onUpload(filename, cleaned, DocumentType.TEXT, detectLanguage(cleaned), selectedSourceType);

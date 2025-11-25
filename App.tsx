@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo, useEffect } from 'react';
 import { LayoutDashboard, Library, MessageSquareText, BookA, Menu, X, Database, Bot, Globe, Download, FileDown, GraduationCap, Languages, Link, Search, ArrowUpDown, ArrowUp, ArrowDown, Trash2, FileText, FileAudio, Video, Image as ImageIcon, Loader2 } from 'lucide-react';
 import { CorpusDocument, DocumentType, Language, SourceType, GlossaryItem, PosBreakdown } from './types';
@@ -164,7 +165,7 @@ const App: React.FC = () => {
     }
   };
 
-  const handleUpload = async (title: string, content: string, type: DocumentType, lang: Language) => {
+  const handleUpload = async (title: string, content: string, type: DocumentType, lang: Language, source?: SourceType, media?: string) => {
     const cleanedContent = cleanCorpusText(content);
     const sentiment = analyzeSentiment(cleanedContent, lang);
     
@@ -184,13 +185,14 @@ const App: React.FC = () => {
       content: cleanedContent,
       type,
       language: lang,
-      sourceType: SourceType.MANUAL_UPLOAD,
+      sourceType: source || SourceType.MANUAL_UPLOAD,
       tokenCount: tokenize(cleanedContent).length,
       uploadDate: new Date().toLocaleDateString(),
       sentiment: sentiment,
       author: 'Unknown',
       sourceUrl: 'Local File',
-      posData: posData
+      posData: posData,
+      media: media // Store image data
     };
     setDocuments(prev => [...prev, newDoc]);
   };
@@ -323,12 +325,40 @@ const App: React.FC = () => {
       <aside className={`fixed lg:static inset-y-0 left-0 z-30 w-72 bg-slate-900 text-white transform transition-transform duration-300 lg:transform-none flex flex-col ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="p-6 bg-slate-950 border-b border-slate-800">
             <div className="flex flex-col items-center space-y-4">
-                <div className="flex items-center justify-between w-full px-2">
-                    <div className="w-14 h-14 bg-white rounded-full flex items-center justify-center p-1 overflow-hidden shadow-lg border-2 border-green-600">
-                        <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/f/f0/Escudo-UABC-2020-color.png/240px-Escudo-UABC-2020-color.png" alt="UABC" className="w-full h-full object-contain" onError={(e) => {e.currentTarget.style.display='none'; e.currentTarget.parentElement!.innerText='UABC'}} />
+                <div className="flex items-center justify-between w-full px-2 gap-2">
+                    {/* UABC LOGO SAFE CONTAINER */}
+                    <div className="w-14 h-14 bg-white rounded-full flex items-center justify-center p-1 overflow-hidden shadow-lg border-2 border-green-600 relative group">
+                        <img 
+                            src="https://upload.wikimedia.org/wikipedia/commons/thumb/f/f0/Escudo-UABC-2020-color.png/240px-Escudo-UABC-2020-color.png" 
+                            alt="UABC" 
+                            className="w-full h-full object-contain" 
+                            onError={(e) => {
+                                e.currentTarget.style.display='none'; 
+                                if (e.currentTarget.parentElement) {
+                                   const span = document.createElement('span');
+                                   span.className = "text-xs font-bold text-green-700";
+                                   span.innerText = "UABC";
+                                   e.currentTarget.parentElement.appendChild(span);
+                                }
+                            }} 
+                        />
                     </div>
-                    <div className="w-14 h-14 bg-white rounded-full flex items-center justify-center p-1 overflow-hidden shadow-lg border-2 border-yellow-500">
-                        <img src="https://idiomas.tij.uabc.mx/images/logo.png" alt="Idiomas" className="w-full h-full object-contain" onError={(e) => {e.currentTarget.style.display='none'; e.currentTarget.parentElement!.innerText='F.I.'}} />
+                    {/* IDIOMAS LOGO SAFE CONTAINER */}
+                    <div className="w-14 h-14 bg-white rounded-full flex items-center justify-center p-1 overflow-hidden shadow-lg border-2 border-yellow-500 relative group">
+                        <img 
+                            src="https://www.uabc.mx/wp-content/uploads/2019/07/logo-uabc-web.png" // Backup general logo if specific one fails
+                            alt="Idiomas" 
+                            className="w-full h-full object-contain" 
+                            onError={(e) => {
+                                e.currentTarget.style.display='none'; 
+                                if (e.currentTarget.parentElement) {
+                                   const span = document.createElement('span');
+                                   span.className = "text-[10px] font-bold text-yellow-600 text-center leading-tight";
+                                   span.innerText = "F.L.";
+                                   e.currentTarget.parentElement.appendChild(span);
+                                }
+                            }} 
+                        />
                     </div>
                 </div>
                 <div className="text-center space-y-1">
@@ -504,12 +534,20 @@ const App: React.FC = () => {
                                             <tr key={doc.id} className="hover:bg-slate-50 transition-colors group">
                                                 <td className="px-6 py-3 font-medium text-slate-800 max-w-[200px]" title={doc.title}>
                                                     <div className="flex items-center gap-3">
-                                                        {getTypeIcon(doc.type)}
-                                                        <div className="truncate flex-1 flex items-center gap-2">
-                                                            {doc.title}
-                                                            {doc.posData && (
-                                                                <span className="text-[9px] uppercase tracking-wide bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded border border-blue-100 font-semibold" title="Grammar Data Ready">POS</span>
-                                                            )}
+                                                        {doc.media ? (
+                                                            <div className="w-8 h-8 rounded overflow-hidden border border-slate-200 flex-shrink-0 bg-slate-100">
+                                                                <img src={doc.media} alt="" className="w-full h-full object-cover" />
+                                                            </div>
+                                                        ) : (
+                                                            getTypeIcon(doc.type)
+                                                        )}
+                                                        <div className="truncate flex-1 flex flex-col justify-center">
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="truncate">{doc.title}</span>
+                                                                {doc.posData && (
+                                                                    <span className="text-[9px] uppercase tracking-wide bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded border border-blue-100 font-semibold" title="Grammar Data Ready">POS</span>
+                                                                )}
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 </td>

@@ -55,6 +55,7 @@ export interface CorpusDocument {
   sourceUrl?: string;
   sentiment?: SentimentResult;
   posData?: PosBreakdown; // Added for automated grammar storage
+  media?: string; // Base64 data URI for images/thumbnails
 }
 
 export interface KwicResult {

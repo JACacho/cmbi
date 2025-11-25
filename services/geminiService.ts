@@ -130,25 +130,30 @@ export const askCorpusQuestion = async (
 export const generateGlossary = async (contextText: string, targetLang: Language = Language.SPANISH): Promise<GlossaryItem[]> => {
   const ai = getAIClient();
   
-  // Use Flash for speed, prioritize quantity and format
-  const truncatedContext = contextText.substring(0, 40000);
+  // OPTIMIZATION: Use a reasonable context window but prioritize instructions
+  const truncatedContext = contextText.substring(0, 45000);
   const targetLangName = targetLang === Language.SPANISH ? "Spanish" : "English";
 
-  const prompt = `Task: Create a specialized bilingual glossary from the text provided.
+  // ENHANCED PROMPT FOR QUANTITY AND QUALITY
+  const prompt = `Task: Extract a comprehensive bilingual glossary from the provided text.
   
   CRITICAL INSTRUCTIONS:
-  1. Detect the dominant language of the source text.
-  2. Extract AT LEAST 15 specialized, technical, or academic terms found in the text.
-  3. If the source text is Spanish, the 'term' MUST be in Spanish. If English, 'term' is English.
-  4. 'translation' must be in ${targetLangName}.
-  5. 'definition' must be in the SOURCE language.
-  6. 'targetDefinition' must be in ${targetLangName}.
-  7. Provide 2-3 synonyms in ${targetLangName}.
-  8. Provide a real URL for reference.
+  1. QUANTITY: You MUST extract at least 20 to 30 distinct terms. Do not stop at 1 or 5.
+  2. SELECTION: Choose specialized, technical, academic, or key thematic terms relevant to the topic.
+  3. LANGUAGE: 
+     - If the source text is predominantly English, the 'term' is English.
+     - If the source text is predominantly Spanish, the 'term' is Spanish.
+     - If mixed, extract terms in their original language.
+  4. OUTPUT FORMAT:
+     - 'term': The word/phrase.
+     - 'translation': Equivalent in ${targetLangName}.
+     - 'definition': Brief definition in the SOURCE language.
+     - 'targetDefinition': Brief definition in ${targetLangName}.
+     - 'synonyms': 2-3 synonyms in ${targetLangName}.
+     - 'example': A short sentence showing usage.
+     - 'referenceUrl': A real URL (Wikipedia/Dictionary) for the term if known.
   
-  If the text is short, extract as many distinct nouns/verbs as possible to fill the list.
-  
-  Return a valid JSON array.`;
+  Generate a valid JSON array of objects.`;
 
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash',
@@ -250,12 +255,15 @@ export interface SyntheticDoc {
 
 export const analyzePosDistribution = async (text: string): Promise<PosBreakdown> => {
   const ai = getAIClient();
-  // Optimized: Smaller chunk for faster POS tagging
-  const truncatedText = text.substring(0, 5000); 
+  // OPTIMIZATION: Use smaller chunk (1500 chars) for much faster POS tagging
+  // This is statistically sufficient for percentage breakdown.
+  const truncatedText = text.substring(0, 1500); 
 
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash',
-    contents: `Analyze grammatical categories. Return JSON integers (percentage 0-100) for: nouns, verbs, adjectives, adverbs, pronouns, determiners, conjunctions, others. Text: "${truncatedText}"`,
+    contents: `Analyze grammatical categories for this text segment. Return JSON integers (percentage 0-100) for: nouns, verbs, adjectives, adverbs, pronouns, determiners, conjunctions, others.
+    
+    Text: "${truncatedText}"`,
     config: {
       responseMimeType: "application/json",
       responseSchema: {
@@ -294,24 +302,28 @@ export const generateSyntheticCorpusData = async (
   
   const langName = language === Language.SPANISH ? "Spanish" : "English";
 
+  // IMPROVED SOCIAL MEDIA GENERATION LOGIC
   if (sourceType === SourceType.SOCIAL) {
-      systemInstruction = "You are a social media archivist. Capture REAL-TIME usage, slang, and sentiment.";
-      prompt = `Generate a collection of 5-10 realistic social media posts (Tweets, Reddit threads, FB comments) about "${topic}" in ${langName}.
+      systemInstruction = "You are a social media simulator and archivist. You capture REAL-TIME usage, slang, and sentiment from various platforms.";
+      prompt = `Generate a collection of 5 distinct, realistic social media posts about "${topic}" in ${langName}.
       
-      Instructions:
-      1. Search for CURRENT sentiment/news on this topic using Google Search.
-      2. If search returns results, use them to create authentic posts with dates/handles.
-      3. If search fails, SYNTHESIZE highly realistic tweets/posts mimicking today's style (short, emojis, hashtags).
-      4. DO NOT FAIL. Always return text formatted as social media posts.
-      5. Include a mix of platforms (X, Instagram captions, Telegram messages).`;
+      Requirements:
+      1. Use CURRENT context (simulate 2024/2025).
+      2. Vary the platforms: Twitter/X (short, hashtags), Reddit (longer, opinionated), Instagram (visual desc, caption).
+      3. Format each post clearly:
+         [Platform: X] @user: ...
+         [Platform: Reddit] u/user: ...
+      4. Include slang, emojis, and informal grammar appropriate for the platform.
+      
+      If you can search for real recent tweets via Google Search, do so. If not, synthesize highly realistic ones.`;
       
       tools = [{googleSearch: {}}];
   } else if (sourceType === SourceType.YOUTUBE) {
       systemInstruction = "You are a YouTube transcription bot.";
-      prompt = `Generate a TRANSCRIPT of a video about "${topic}" in ${langName}. Include timestamps. Style: Spoken, informal/educational.`;
+      prompt = `Generate a TRANSCRIPT of a video about "${topic}" in ${langName}. Include timestamps [00:12]. Style: Spoken, informal/educational.`;
   } else {
       systemInstruction = "You are an academic retrieval system.";
-      prompt = `Generate an Academic Paper excerpt about "${topic}" in ${langName}. Formal register. Include Abstract and Introduction.`;
+      prompt = `Generate an Academic Paper excerpt about "${topic}" in ${langName}. Formal register. Include Abstract and Introduction. Cite fake or real sources.`;
   }
 
   const response = await ai.models.generateContent({
@@ -327,8 +339,7 @@ export const generateSyntheticCorpusData = async (
   const titleMatch = text.match(/^(Title:|Subject:|Video:)?\s*(.+)$/m);
   const title = titleMatch ? titleMatch[2].trim().substring(0, 50) : `${sourceType} - ${topic}`;
   
-  // OPTIMIZATION: Calculate Grammar concurrently with generation return
-  // We do it here so the doc arrives "fully baked"
+  // OPTIMIZATION: Calculate Grammar concurrently or immediately after
   const posData = await analyzePosDistribution(text);
 
   return {

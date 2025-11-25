@@ -4,6 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CMBI - Corpus Lab</title>
+    <meta name="description" content="Laboratorio de Corpus Bilingüe e Inteligencia Artificial">
+    <link rel="manifest" href="./manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -26,39 +28,45 @@
       ::-webkit-scrollbar-thumb:hover {
         background: #94a3b8;
       }
-      /* Print styles */
       @media print {
         body * {
           visibility: hidden;
         }
-        #print-area, #print-area * {
+        .document-view, .document-view * {
           visibility: visible;
         }
-        #print-area {
+        .document-view {
           position: absolute;
           left: 0;
           top: 0;
           width: 100%;
+          margin: 0;
+          padding: 20px;
+          box-shadow: none;
         }
       }
     </style>
   <script type="importmap">
 {
   "imports": {
+    "react": "https://aistudiocdn.com/react@^19.2.0",
     "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
     "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "react": "https://aistudiocdn.com/react@^19.2.0",
     "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
     "lucide-react": "https://aistudiocdn.com/lucide-react@^0.554.0",
-    "recharts": "https://aistudiocdn.com/recharts@^3.4.1",
+    "xlsx": "https://aistudiocdn.com/xlsx@^0.18.5",
     "jszip": "https://aistudiocdn.com/jszip@^3.10.1",
-    "xlsx": "https://aistudiocdn.com/xlsx@^0.18.5/dist/xlsx.mini.min.js",
-    "html-to-image": "https://aistudiocdn.com/html-to-image@^1.11.11"
+    "mammoth": "https://aistudiocdn.com/mammoth@^1.11.0",
+    "recharts": "https://aistudiocdn.com/recharts@^3.5.0",
+    "html-to-image": "https://aistudiocdn.com/html-to-image@^1.11.13",
+    "vite": "https://aistudiocdn.com/vite@^7.2.4",
+    "@vitejs/plugin-react": "https://aistudiocdn.com/@vitejs/plugin-react@^5.1.1"
   }
 }
 </script>
 </head>
   <body class="bg-slate-50 text-slate-900 antialiased">
     <div id="root"></div>
+    <script type="module" src="./index.tsx"></script>
   </body>
 </html>

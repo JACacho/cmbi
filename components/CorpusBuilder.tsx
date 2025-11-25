@@ -70,13 +70,14 @@ export const CorpusBuilder: React.FC<CorpusBuilderProps> = ({ onDocsGenerated, u
           break;
         }
 
-        // Logic to ensure rotation of selected sources
+        // Rotate selected sources
         const currentSource = selectedSources[i % selectedSources.length];
         const currentLang = selectedLangs[i % selectedLangs.length];
         
-        addLog(`[${i + 1}/${count}] Fetching ${currentSource} (${currentLang})...`);
+        addLog(`[${i + 1}/${count}] Generating type: ${currentSource} (${currentLang})...`);
 
-        await new Promise(r => setTimeout(r, 600)); // Slight delay
+        // Reduced delay for speed (Optimization)
+        await new Promise(r => setTimeout(r, 100)); 
 
         try {
             const data = await generateSyntheticCorpusData(topic, currentSource, currentLang);
@@ -208,7 +209,7 @@ export const CorpusBuilder: React.FC<CorpusBuilderProps> = ({ onDocsGenerated, u
                     <div className="w-3 h-3 rounded-full bg-amber-500"></div>
                     <div className="w-3 h-3 rounded-full bg-green-500"></div>
                 </div>
-                <span className="text-slate-400 text-xs ml-2">cmbi-agent --verbose --grammar=auto --social=fallback</span>
+                <span className="text-slate-400 text-xs ml-2">cmbi-agent --verbose --grammar=auto --social=active</span>
             </div>
             <div className="flex-1 p-4 overflow-y-auto space-y-1 text-green-400">
                 {logs.length === 0 ? <span className="text-slate-600 opacity-50">{t.waiting}</span> : logs.map((log, idx) => (<div key={idx} className="break-words"><span className="text-slate-500 mr-2">$</span>{log}</div>))}

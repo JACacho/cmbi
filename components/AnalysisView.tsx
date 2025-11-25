@@ -60,7 +60,6 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ documents, uiLang, globalPo
   }, [filteredDocuments]);
 
   // AUTOMATED GRAMMAR AGGREGATION (Optimization)
-  // Instead of calling AI again, we sum the posData attached to each document.
   const aggregatedPosData = useMemo(() => {
       const total = { nouns: 0, verbs: 0, adjectives: 0, adverbs: 0, pronouns: 0, determiners: 0, conjunctions: 0, others: 0 };
       let count = 0;
@@ -178,7 +177,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ documents, uiLang, globalPo
                 <div className="overflow-y-auto flex-1 pr-2 custom-scrollbar">
                     <ul className="space-y-1 text-sm">
                         {frequencies.map((f, i) => (
-                            <li key={f.token} onClick={() => jumpToKwic(f.token)} className="group flex justify-between items-center border-b border-slate-50 last:border-0 py-1.5 cursor-pointer hover:bg-indigo-50 px-2 rounded transition-colors">
+                            <li key={f.token} onClick={() => jumpToKwic(f.token)} className="group flex justify-between items-center border-b border-slate-50 last:border-0 py-1.5 cursor-pointer hover:bg-indigo-50 px-2 rounded transition-colors" title="View Concordance">
                                 <span className="text-slate-600 group-hover:text-indigo-700 font-medium flex items-center gap-2"><span className="text-xs text-slate-300 w-6">{i+1}</span> {f.token}</span>
                                 <span className="font-mono text-slate-400 group-hover:text-indigo-500 text-xs">{f.count}</span>
                             </li>
@@ -228,7 +227,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ documents, uiLang, globalPo
                                      <tr 
                                         key={idx} 
                                         className="hover:bg-indigo-50 cursor-pointer transition-colors group"
-                                        onClick={() => jumpToKwic(gram.token)} // Added Click Handler
+                                        onClick={() => jumpToKwic(gram.token)} 
                                         title="Click to see concordances"
                                      >
                                          <td className="p-2.5 font-mono text-slate-700 group-hover:text-indigo-700">{gram.token}</td>
@@ -244,7 +243,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ documents, uiLang, globalPo
                     <Layers className="w-16 h-16 text-indigo-200 mb-4" />
                     <h3 className="text-xl font-bold text-slate-800">Interactive Clusters</h3>
                     <p className="text-slate-500 max-w-sm mt-2">
-                        Click on any row in the table to instantly generate KWIC lines for that phrase.
+                        Click on any row in the table to instantly generate KWIC lines for that phrase in the Concordance tab.
                     </p>
                </div>
            </div>
@@ -290,7 +289,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ documents, uiLang, globalPo
               <div className="flex justify-between items-start mb-6">
                   <div>
                       <h3 className="text-lg font-semibold text-slate-800">{t.tabGrammar}</h3>
-                      <p className="text-sm text-slate-500">{t.grammarDesc} (Real-time Aggregation)</p>
+                      <p className="text-sm text-slate-500">{t.grammarDesc} (Automatic Real-time Aggregation)</p>
                   </div>
               </div>
 
@@ -307,7 +306,8 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ documents, uiLang, globalPo
                                     innerRadius={60}
                                     paddingAngle={2}
                                     dataKey="value"
-                                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`} // Added Labels
+                                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                                    labelLine={true}
                                 >
                                     {formatPosChartData(aggregatedPosData).map((entry, index) => (
                                         <Cell key={`cell-${index}`} fill={POS_COLORS[index % POS_COLORS.length]} />
@@ -372,7 +372,8 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ documents, uiLang, globalPo
                                 outerRadius={100}
                                 paddingAngle={5}
                                 dataKey="value"
-                                label={({ name, percent }) => `${(percent * 100).toFixed(0)}%`} // Added Labels
+                                label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                                labelLine={true}
                             >
                                 {sentimentData.map((entry, index) => (
                                     <Cell key={`cell-${index}`} fill={SENTIMENT_COLORS[entry.name as keyof typeof SENTIMENT_COLORS]} />
