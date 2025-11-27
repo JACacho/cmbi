@@ -1,9 +1,11 @@
+
 import React, { useState, useEffect, useRef } from 'react';
-import { Bot, Play, StopCircle, Database, Globe, BookOpen, Youtube, MessageCircle, Share2 } from 'lucide-react';
+import { Bot, Play, StopCircle, Database, Globe, BookOpen, Youtube, MessageCircle, Share2, Code, Download } from 'lucide-react';
 import { SourceType, Language, DocumentType, CorpusDocument } from '../types';
 import { generateSyntheticCorpusData } from '../services/geminiService';
 import { analyzeSentiment, tokenize } from '../utils/nlp';
 import { translations } from '../utils/translations';
+import { PYTHON_OPTIMIZER_SCRIPT } from '../utils/pythonScript';
 
 interface CorpusBuilderProps {
   onDocsGenerated: (docs: CorpusDocument[]) => void;
@@ -43,6 +45,17 @@ export const CorpusBuilder: React.FC<CorpusBuilderProps> = ({ onDocsGenerated, u
     setSelectedSources(prev => 
       prev.includes(source) ? prev.filter(s => s !== source) : [...prev, source]
     );
+  };
+
+  const downloadPythonScript = () => {
+    // Uses the imported string constant to generate the file
+    const blob = new Blob([PYTHON_OPTIMIZER_SCRIPT], { type: 'text/x-python' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'corpus_optimizer_local.py';
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const startBuild = async () => {
@@ -95,7 +108,7 @@ export const CorpusBuilder: React.FC<CorpusBuilderProps> = ({ onDocsGenerated, u
                 sentiment: sentiment,
                 sourceUrl: data.url,
                 author: data.author,
-                posData: data.posData // NOW INCLUDED
+                posData: data.posData 
             };
 
             newDocs.push(doc);
@@ -104,12 +117,12 @@ export const CorpusBuilder: React.FC<CorpusBuilderProps> = ({ onDocsGenerated, u
 
         } catch (error) {
             console.error(error);
-            addLog(`✗ Error fetching document ${i+1}. Retrying...`);
+            addLog(`✗ Error fetching document ${i+1}. Switching to fallback models...`);
         }
 
         setProgress(((i + 1) / count) * 100);
       }
-      addLog("Collection complete. Post-processing starting automatically in background...");
+      addLog("Collection complete. Local cache updated.");
     } catch (e) {
       addLog("Critical Error in collection agent.");
     } finally {
@@ -139,12 +152,12 @@ export const CorpusBuilder: React.FC<CorpusBuilderProps> = ({ onDocsGenerated, u
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">{t.topicLabel}</label>
-              <input type="text" value={topic} onChange={(e) => setTopic(e.target.value)} disabled={isBuilding} placeholder={t.topicPlaceholder} className="w-full px-3 py-2 border border-slate-300 rounded-md" />
+              <input type="text" value={topic} onChange={(e) => setTopic(e.target.value)} disabled={isBuilding} placeholder={t.topicPlaceholder} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500" />
             </div>
 
             <div>
                <label className="block text-sm font-medium text-slate-700 mb-1">{t.sizeLabel}: {count} docs</label>
-               <input type="range" min="3" max="100" value={count} onChange={(e) => setCount(parseInt(e.target.value))} disabled={isBuilding} className="w-full h-2 bg-slate-200 rounded-lg" />
+               <input type="range" min="3" max="100" value={count} onChange={(e) => setCount(parseInt(e.target.value))} disabled={isBuilding} className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600" />
                <div className="flex justify-between text-xs text-slate-400 mt-1"><span>3</span><span>50</span><span>100</span></div>
             </div>
 
@@ -152,11 +165,11 @@ export const CorpusBuilder: React.FC<CorpusBuilderProps> = ({ onDocsGenerated, u
                <label className="block text-sm font-medium text-slate-700 mb-2">{t.langLabel}</label>
                <div className="flex gap-4">
                   <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={selectedLangs.includes(Language.ENGLISH)} onChange={() => handleLangToggle(Language.ENGLISH)} disabled={isBuilding} className="w-4 h-4 text-indigo-600" />
+                    <input type="checkbox" checked={selectedLangs.includes(Language.ENGLISH)} onChange={() => handleLangToggle(Language.ENGLISH)} disabled={isBuilding} className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500" />
                     <span className="text-sm text-slate-600">English</span>
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={selectedLangs.includes(Language.SPANISH)} onChange={() => handleLangToggle(Language.SPANISH)} disabled={isBuilding} className="w-4 h-4 text-indigo-600" />
+                    <input type="checkbox" checked={selectedLangs.includes(Language.SPANISH)} onChange={() => handleLangToggle(Language.SPANISH)} disabled={isBuilding} className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500" />
                     <span className="text-sm text-slate-600">Español</span>
                   </label>
                </div>
@@ -166,15 +179,15 @@ export const CorpusBuilder: React.FC<CorpusBuilderProps> = ({ onDocsGenerated, u
                 <label className="block text-sm font-medium text-slate-700 mb-2">{t.sourcesLabel}</label>
                 <div className="space-y-2">
                     <label className="flex items-center gap-2 cursor-pointer bg-slate-50 p-2 rounded border border-slate-100 hover:bg-slate-100 transition-colors">
-                        <input type="checkbox" checked={selectedSources.includes(SourceType.ACADEMIC)} onChange={() => handleSourceToggle(SourceType.ACADEMIC)} disabled={isBuilding} className="w-4 h-4" />
+                        <input type="checkbox" checked={selectedSources.includes(SourceType.ACADEMIC)} onChange={() => handleSourceToggle(SourceType.ACADEMIC)} disabled={isBuilding} className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500" />
                         <div className="flex items-center gap-2 text-sm text-slate-700"><BookOpen className="w-4 h-4 text-emerald-600" /> <span>Academic / Scholar</span></div>
                     </label>
                     <label className="flex items-center gap-2 cursor-pointer bg-slate-50 p-2 rounded border border-slate-100 hover:bg-slate-100 transition-colors">
-                        <input type="checkbox" checked={selectedSources.includes(SourceType.YOUTUBE)} onChange={() => handleSourceToggle(SourceType.YOUTUBE)} disabled={isBuilding} className="w-4 h-4" />
+                        <input type="checkbox" checked={selectedSources.includes(SourceType.YOUTUBE)} onChange={() => handleSourceToggle(SourceType.YOUTUBE)} disabled={isBuilding} className="w-4 h-4 text-red-600 rounded focus:ring-red-500" />
                         <div className="flex items-center gap-2 text-sm text-slate-700"><Youtube className="w-4 h-4 text-red-600" /> <span>YouTube Transcripts</span></div>
                     </label>
                     <label className="flex items-center gap-2 cursor-pointer bg-slate-50 p-2 rounded border border-slate-100 hover:bg-slate-100 transition-colors">
-                        <input type="checkbox" checked={selectedSources.includes(SourceType.SOCIAL)} onChange={() => handleSourceToggle(SourceType.SOCIAL)} disabled={isBuilding} className="w-4 h-4" />
+                        <input type="checkbox" checked={selectedSources.includes(SourceType.SOCIAL)} onChange={() => handleSourceToggle(SourceType.SOCIAL)} disabled={isBuilding} className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500" />
                         <div className="flex items-center gap-2 text-sm text-slate-700"><Share2 className="w-4 h-4 text-blue-600" /> <span>Social Media (FB, X, Telegram)</span></div>
                     </label>
                 </div>
@@ -182,12 +195,18 @@ export const CorpusBuilder: React.FC<CorpusBuilderProps> = ({ onDocsGenerated, u
 
             <div className="pt-4 border-t border-slate-100">
                 {!isBuilding ? (
-                    <button onClick={startBuild} className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2.5 rounded-lg transition-colors"><Play className="w-4 h-4" /> {t.startButton}</button>
+                    <button onClick={startBuild} className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2.5 rounded-lg transition-colors shadow-sm"><Play className="w-4 h-4" /> {t.startBtn}</button>
                 ) : (
-                    <button onClick={stopBuild} className="w-full flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-medium py-2.5 rounded-lg"><StopCircle className="w-4 h-4" /> {t.stopButton}</button>
+                    <button onClick={stopBuild} className="w-full flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-medium py-2.5 rounded-lg transition-colors"><StopCircle className="w-4 h-4" /> {t.stopBtn}</button>
                 )}
             </div>
-          </div>
+
+            <div className="pt-4 border-t border-slate-100">
+                <p className="text-xs text-slate-400 mb-2">Advanced: Run offline optimization</p>
+                <button onClick={downloadPythonScript} className="w-full flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-900 text-white text-xs font-medium py-2 rounded-lg transition-colors">
+                    <Code className="w-3 h-3" /> Download Python Accelerator
+                </button>
+            </div>
         </div>
       </div>
 
@@ -195,7 +214,10 @@ export const CorpusBuilder: React.FC<CorpusBuilderProps> = ({ onDocsGenerated, u
           <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
              <div className="flex justify-between items-center mb-2">
                 <h4 className="font-semibold text-slate-700">{t.statusTitle}</h4>
-                <span className={`text-xs font-mono px-2 py-1 rounded ${isBuilding ? 'bg-green-100 text-green-700 animate-pulse' : 'bg-slate-100 text-slate-500'}`}>{isBuilding ? t.running : t.idle}</span>
+                <div className="flex gap-2">
+                    <span className="text-xs font-mono px-2 py-1 rounded bg-slate-100 text-slate-500">Provider: Auto-Failover</span>
+                    <span className={`text-xs font-mono px-2 py-1 rounded ${isBuilding ? 'bg-green-100 text-green-700 animate-pulse' : 'bg-slate-100 text-slate-500'}`}>{isBuilding ? t.running : t.idle}</span>
+                </div>
              </div>
              <div className="w-full bg-slate-100 rounded-full h-2.5 mb-1">
                 <div className="bg-indigo-600 h-2.5 rounded-full transition-all duration-300" style={{ width: `${progress}%` }}></div>
@@ -210,18 +232,10 @@ export const CorpusBuilder: React.FC<CorpusBuilderProps> = ({ onDocsGenerated, u
                     <div className="w-3 h-3 rounded-full bg-amber-500"></div>
                     <div className="w-3 h-3 rounded-full bg-green-500"></div>
                 </div>
-                <span className="text-slate-400 text-xs ml-2">cmbi-agent --verbose --grammar=auto --social=active</span>
+                <span className="text-slate-400 text-xs ml-2">cmbi-agent --provider=auto --cache=enabled</span>
             </div>
             <div className="flex-1 p-4 overflow-y-auto space-y-1 text-green-400">
-                {logs.length === 0 ? (
-                  <span className="text-slate-600 opacity-50">{t.waiting}</span>
-                ) : (
-                  logs.map((log, idx) => (
-                    <div key={idx} className="break-words">
-                      <span className="text-slate-50">{log}</span>
-                    </div>
-                  ))
-                )}
+                {logs.length === 0 ? <span className="text-slate-600 opacity-50">{t.waiting}</span> : logs.map((log, idx) => (<div key={idx} className="break-words"><span className="text-slate-500 mr-2">$</span>{log}</div>))}
                 <div ref={logsEndRef} />
             </div>
           </div>

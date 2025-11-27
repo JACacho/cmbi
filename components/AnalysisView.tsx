@@ -14,7 +14,8 @@ interface AnalysisViewProps {
 
 const AnalysisView: React.FC<AnalysisViewProps> = ({ documents, uiLang, globalPosData, onUpdatePosData }) => {
   const [activeTab, setActiveTab] = useState<'stats' | 'kwic' | 'sentiment' | 'grammar' | 'ngrams'>('stats');
-  const [kwicKeyword, setKwicKeyword] = useState('');
+  // Global Search State
+  const [globalSearchTerm, setGlobalSearchTerm] = useState('');
   const [kwicResults, setKwicResults] = useState<KwicResult[]>([]);
   const [selectedSource, setSelectedSource] = useState<SourceType | 'ALL'>('ALL');
   
@@ -28,15 +29,38 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ documents, uiLang, globalPo
       return documents.filter(d => d.sourceType === selectedSource);
   }, [documents, selectedSource]);
 
-  const frequencies = useMemo(() => calculateFrequencies(filteredDocuments, removeStopwords), [filteredDocuments, removeStopwords]);
+  // Unified Filtering Logic for Lists
+  const frequencies = useMemo(() => {
+      let freqs = calculateFrequencies(filteredDocuments, removeStopwords);
+      if (globalSearchTerm) {
+          const lowerTerm = globalSearchTerm.toLowerCase();
+          freqs = freqs.filter(f => f.token.toLowerCase().includes(lowerTerm));
+      }
+      return freqs;
+  }, [filteredDocuments, removeStopwords, globalSearchTerm]);
   
   const ngrams = useMemo(() => {
       let allTokens: string[] = [];
       filteredDocuments.forEach(doc => {
           allTokens = [...allTokens, ...tokenize(doc.content, removeStopwords, doc.language)];
       });
-      return generateNgrams(allTokens, ngramSize).slice(0, 100);
-  }, [filteredDocuments, ngramSize, removeStopwords]);
+      let grams = generateNgrams(allTokens, ngramSize).slice(0, 100);
+      if (globalSearchTerm) {
+          const lowerTerm = globalSearchTerm.toLowerCase();
+          grams = grams.filter(g => g.token.toLowerCase().includes(lowerTerm));
+      }
+      return grams;
+  }, [filteredDocuments, ngramSize, removeStopwords, globalSearchTerm]);
+
+  // Auto-trigger KWIC when global search changes
+  useEffect(() => {
+      if (globalSearchTerm.length > 2) {
+          const results = generateKwic(filteredDocuments, globalSearchTerm);
+          setKwicResults(results);
+      } else {
+          setKwicResults([]);
+      }
+  }, [globalSearchTerm, filteredDocuments]);
 
   const typeTokenRatio = useMemo(() => calculateTypeTokenRatio(filteredDocuments), [filteredDocuments]);
   const totalTokens = useMemo(() => filteredDocuments.reduce((acc, doc) => acc + doc.tokenCount, 0), [filteredDocuments]);
@@ -59,7 +83,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ documents, uiLang, globalPo
       }));
   }, [filteredDocuments]);
 
-  // AUTOMATED GRAMMAR AGGREGATION (Optimization)
+  // AUTOMATED GRAMMAR AGGREGATION
   const aggregatedPosData = useMemo(() => {
       const total = { nouns: 0, verbs: 0, adjectives: 0, adverbs: 0, pronouns: 0, determiners: 0, conjunctions: 0, others: 0 };
       let count = 0;
@@ -93,19 +117,9 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ documents, uiLang, globalPo
       };
   }, [filteredDocuments]);
 
-
-  const handleSearchKwic = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!kwicKeyword.trim()) return;
-    const results = generateKwic(filteredDocuments, kwicKeyword);
-    setKwicResults(results);
-  };
-
   const jumpToKwic = (word: string) => {
-    setKwicKeyword(word);
+    setGlobalSearchTerm(word);
     setActiveTab('kwic');
-    const results = generateKwic(filteredDocuments, word);
-    setKwicResults(results);
   };
 
   const SENTIMENT_COLORS = { Positive: '#10b981', Neutral: '#94a3b8', Negative: '#ef4444' };
@@ -127,26 +141,42 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ documents, uiLang, globalPo
 
   return (
     <div className="h-full flex flex-col space-y-6">
-      <div className="flex flex-wrap justify-between items-center gap-4 bg-white p-2 rounded-xl border border-slate-200 shadow-sm">
-        <div className="flex space-x-1 bg-slate-100 p-1 rounded-lg overflow-x-auto">
+      
+      {/* GLOBAL SEARCH & FILTER HEADER */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <div className="flex-1 w-full md:w-auto relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-indigo-500" />
+              <input 
+                type="text" 
+                value={globalSearchTerm} 
+                onChange={(e) => setGlobalSearchTerm(e.target.value)} 
+                placeholder="Search word/phrase in Corpus (List, N-Grams, Concordance)..." 
+                className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500" 
+              />
+          </div>
+          
+          <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+                <div className="flex items-center gap-2 px-3 py-2 bg-slate-50 rounded-lg border border-slate-200">
+                    <Filter className="w-4 h-4 text-slate-400" />
+                    <select value={selectedSource} onChange={(e) => setSelectedSource(e.target.value as SourceType | 'ALL')} className="text-sm border-none bg-transparent focus:ring-0 text-slate-700 font-medium cursor-pointer py-0">
+                        <option value="ALL">{t.allSources}</option>
+                        <option value={SourceType.ACADEMIC}>Academic</option>
+                        <option value={SourceType.YOUTUBE}>YouTube</option>
+                        <option value={SourceType.SOCIAL}>Social Media</option>
+                        <option value={SourceType.CLASSROOM}>Classroom/Tasks</option>
+                        <option value={SourceType.MANUAL_UPLOAD}>Manual Uploads</option>
+                    </select>
+                </div>
+          </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex space-x-1 bg-slate-100 p-1 rounded-lg overflow-x-auto w-fit">
             <button onClick={() => setActiveTab('stats')} className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'stats' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}><BarChart3 className="w-4 h-4" /> {t.tabStats}</button>
             <button onClick={() => setActiveTab('ngrams')} className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'ngrams' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}><Layers className="w-4 h-4" /> N-Grams</button>
-            <button onClick={() => setActiveTab('kwic')} className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'kwic' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}><AlignLeft className="w-4 h-4" /> {t.tabKwic}</button>
+            <button onClick={() => setActiveTab('kwic')} className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'kwic' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}><AlignLeft className="w-4 h-4" /> {t.tabKwic} <span className="bg-indigo-100 text-indigo-600 px-1.5 rounded text-[10px]">{kwicResults.length}</span></button>
             <button onClick={() => setActiveTab('sentiment')} className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'sentiment' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}><HeartPulse className="w-4 h-4" /> {t.tabSentiment}</button>
             <button onClick={() => setActiveTab('grammar')} className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'grammar' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}><BookText className="w-4 h-4" /> {t.tabGrammar}</button>
-        </div>
-        
-        <div className="flex items-center gap-2 px-2">
-            <Filter className="w-4 h-4 text-slate-400" />
-            <select value={selectedSource} onChange={(e) => { setSelectedSource(e.target.value as SourceType | 'ALL'); setKwicResults([]); }} className="text-sm border-none bg-slate-50 focus:ring-0 text-slate-700 font-medium rounded-md cursor-pointer hover:bg-slate-100 py-1">
-                <option value="ALL">{t.allSources}</option>
-                <option value={SourceType.ACADEMIC}>Academic</option>
-                <option value={SourceType.YOUTUBE}>YouTube</option>
-                <option value={SourceType.SOCIAL}>Social Media</option>
-                <option value={SourceType.CLASSROOM}>Classroom/Tasks</option>
-                <option value={SourceType.MANUAL_UPLOAD}>Manual Uploads</option>
-            </select>
-        </div>
       </div>
 
       {activeTab === 'stats' && (
@@ -178,7 +208,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ documents, uiLang, globalPo
                     <ul className="space-y-1 text-sm">
                         {frequencies.map((f, i) => (
                             <li key={f.token} onClick={() => jumpToKwic(f.token)} className="group flex justify-between items-center border-b border-slate-50 last:border-0 py-1.5 cursor-pointer hover:bg-indigo-50 px-2 rounded transition-colors" title="View Concordance">
-                                <span className="text-slate-600 group-hover:text-indigo-700 font-medium flex items-center gap-2"><span className="text-xs text-slate-300 w-6">{i+1}</span> {f.token}</span>
+                                <span className={`text-slate-600 group-hover:text-indigo-700 font-medium flex items-center gap-2 ${globalSearchTerm && f.token.includes(globalSearchTerm.toLowerCase()) ? 'bg-yellow-100 text-yellow-800 px-1 rounded' : ''}`}><span className="text-xs text-slate-300 w-6">{i+1}</span> {f.token}</span>
                                 <span className="font-mono text-slate-400 group-hover:text-indigo-500 text-xs">{f.count}</span>
                             </li>
                         ))}
@@ -230,7 +260,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ documents, uiLang, globalPo
                                         onClick={() => jumpToKwic(gram.token)} 
                                         title="Click to see concordances"
                                      >
-                                         <td className="p-2.5 font-mono text-slate-700 group-hover:text-indigo-700">{gram.token}</td>
+                                         <td className={`p-2.5 font-mono text-slate-700 group-hover:text-indigo-700 ${globalSearchTerm && gram.token.includes(globalSearchTerm.toLowerCase()) ? 'bg-yellow-50' : ''}`}>{gram.token}</td>
                                          <td className="p-2.5 text-right font-semibold text-indigo-600">{gram.count}</td>
                                      </tr>
                                  ))}
@@ -251,36 +281,37 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ documents, uiLang, globalPo
 
       {activeTab === 'kwic' && (
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col flex-1 min-h-[500px] animate-fade-in">
-          <div className="p-4 border-b border-slate-100 flex items-center gap-4">
-            <form onSubmit={handleSearchKwic} className="flex-1 flex gap-2">
-              <div className="relative flex-1 max-w-md">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                <input type="text" value={kwicKeyword} onChange={(e) => setKwicKeyword(e.target.value)} placeholder={t.searchPlaceholder} className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-              </div>
-              <button type="submit" className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors font-medium">{t.generateKwic}</button>
-            </form>
+          <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+            <h3 className="font-semibold text-slate-700">Concordance Lines</h3>
             <div className="text-sm text-slate-500">{t.found}: <span className="font-semibold text-indigo-600">{kwicResults.length}</span></div>
           </div>
-          <div className="flex-1 overflow-y-auto p-0">
-              <table className="w-full text-sm border-collapse table-fixed">
-                <thead className="bg-slate-50 sticky top-0 z-10 shadow-sm">
-                  <tr>
-                    <th className="p-3 text-right w-[42%] text-slate-500 font-medium">{t.leftContext}</th>
-                    <th className="p-3 text-center w-[16%] text-indigo-600 font-bold bg-indigo-50">{t.node}</th>
-                    <th className="p-3 text-left w-[42%] text-slate-500 font-medium">{t.rightContext}</th>
-                  </tr>
-                </thead>
-                <tbody className="font-mono text-xs md:text-sm">
-                  {kwicResults.map((res, idx) => (
-                    <tr key={idx} className="hover:bg-slate-50 border-b border-slate-100">
-                      <td className="p-2 text-right text-slate-600 whitespace-nowrap overflow-hidden" title={res.left}>{res.left}</td>
-                      <td className="p-2 text-center text-indigo-700 font-bold bg-indigo-50/50">{res.node}</td>
-                      <td className="p-2 text-left text-slate-600 whitespace-nowrap overflow-hidden" title={res.right}>{res.right}</td>
+          {kwicResults.length === 0 && !globalSearchTerm ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-slate-400">
+                  <AlignLeft className="w-12 h-12 mb-2 opacity-20" />
+                  <p>Enter a search term above to generate lines.</p>
+              </div>
+          ) : (
+            <div className="flex-1 overflow-y-auto p-0">
+                <table className="w-full text-sm border-collapse table-fixed">
+                    <thead className="bg-slate-50 sticky top-0 z-10 shadow-sm">
+                    <tr>
+                        <th className="p-3 text-right w-[42%] text-slate-500 font-medium">{t.leftContext}</th>
+                        <th className="p-3 text-center w-[16%] text-indigo-600 font-bold bg-indigo-50">{t.node}</th>
+                        <th className="p-3 text-left w-[42%] text-slate-500 font-medium">{t.rightContext}</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-          </div>
+                    </thead>
+                    <tbody className="font-mono text-xs md:text-sm">
+                    {kwicResults.map((res, idx) => (
+                        <tr key={idx} className="hover:bg-slate-50 border-b border-slate-100">
+                        <td className="p-2 text-right text-slate-600 whitespace-nowrap overflow-hidden" title={res.left}>{res.left}</td>
+                        <td className="p-2 text-center text-indigo-700 font-bold bg-indigo-50/50">{res.node}</td>
+                        <td className="p-2 text-left text-slate-600 whitespace-nowrap overflow-hidden" title={res.right}>{res.right}</td>
+                        </tr>
+                    ))}
+                    </tbody>
+                </table>
+            </div>
+          )}
         </div>
       )}
       

@@ -1,7 +1,6 @@
-
 import React, { useState, useMemo, useEffect } from 'react';
 import { BookOpen, RefreshCw, Download, ExternalLink } from 'lucide-react';
-import { CorpusDocument, GlossaryItem } from '../types';
+import { CorpusDocument, GlossaryItem, Language } from '../types';
 import { generateGlossary } from '../services/geminiService';
 import { translations } from '../utils/translations';
 
@@ -60,6 +59,14 @@ const GlossaryView: React.FC<GlossaryViewProps> = ({ documents, uiLang, glossary
 
   const downloadCSV = () => {
     if (processedGlossary.length === 0) return;
+    
+    // Naming Logic: Get the main source document name and pair
+    const mainDoc = documents.length > 0 ? documents[0] : null;
+    const sourceName = mainDoc ? mainDoc.title.replace(/[^a-z0-9-_]/gi, '_').substring(0, 25) : "CMBI_Project";
+    const sourceLang = mainDoc ? mainDoc.language : Language.UNKNOWN;
+    const targetSuffix = sourceLang === Language.ENGLISH ? "EN-ES" : sourceLang === Language.SPANISH ? "ES-EN" : "Bilingual";
+    const fileName = `${sourceName}_Glosario_${targetSuffix}.csv`;
+
     const headers = ["Term", "Translation", "Definition (Source)", "Definition (Target)", "Synonyms", "Example", "Reference URL"];
     const rows = processedGlossary.map(item => [
         `"${item.term || ''}"`,
@@ -78,7 +85,7 @@ const GlossaryView: React.FC<GlossaryViewProps> = ({ documents, uiLang, glossary
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", "cmbi_glossary.csv");
+    link.setAttribute("download", fileName);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

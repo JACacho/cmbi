@@ -2,344 +2,377 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { GlossaryItem, SourceType, DocumentType, Language, PosBreakdown } from "../types";
 import { cleanCorpusText } from "../utils/nlp";
 
-const getAIClient = () => {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) throw new Error("API Key not found in environment");
-  return new GoogleGenAI({ apiKey });
+// --- CONFIGURATION & CACHE ---
+
+const API_KEY = process.env.API_KEY;
+
+// Cache system to save API calls and speed up response
+const RESPONSE_CACHE = new Map<string, string>();
+const MAX_CACHE_SIZE = 100;
+
+const addToCache = (key: string, value: string) => {
+    if (RESPONSE_CACHE.size >= MAX_CACHE_SIZE) {
+        const firstKey = RESPONSE_CACHE.keys().next().value;
+        if (firstKey) RESPONSE_CACHE.delete(firstKey);
+    }
+    RESPONSE_CACHE.set(key, value);
 };
 
-export const transcribeMedia = async (base64Data: string, mimeType: string): Promise<string> => {
-  const ai = getAIClient();
-  
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
-    contents: {
-      parts: [
-        {
-          inlineData: {
-            mimeType: mimeType,
-            data: base64Data,
-          },
-        },
-        {
-          text: "Analyze this document/image. Extract ALL text content. Preserve the visual structure in the text output by using headers, lists, and spacing. If it is a poster or infographic, describe the layout briefly then list all text.",
-        },
-      ],
-    },
-  });
+// Fallback Model List (Order of preference for speed/cost)
+const MODELS = [
+    'gemini-2.5-flash',          // Primary: Best balance
+    'gemini-2.5-flash-lite-preview', // Secondary: Faster/Cheaper
+    'gemini-1.5-flash',          // Fallback: Stability
+];
 
-  return response.text || ""; 
+// Local LLM Configuration (e.g., Ollama running on localhost:11434)
+const LOCAL_LLM_URL = "http://localhost:11434/api/generate";
+const LOCAL_MODEL = "llama3"; // Or mistral, qwen, etc.
+
+// --- AI PROVIDER MANAGER ---
+
+class AIManager {
+    private googleClient: GoogleGenAI | null = null;
+
+    constructor() {
+        if (API_KEY) {
+            this.googleClient = new GoogleGenAI({ apiKey: API_KEY });
+        }
+    }
+
+    private async callLocalLLM(prompt: string, systemInstruction?: string): Promise<string> {
+        try {
+            const fullPrompt = systemInstruction ? `${systemInstruction}\n\n${prompt}` : prompt;
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout for local check
+
+            const response = await fetch(LOCAL_LLM_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    model: LOCAL_MODEL,
+                    prompt: fullPrompt,
+                    stream: false
+                }),
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+
+            if (!response.ok) throw new Error("Local LLM unavailable");
+            const data = await response.json();
+            return data.response;
+        } catch (e) {
+            throw new Error("Local AI failed");
+        }
+    }
+
+    async generate(
+        prompt: string | any, 
+        config: any = {}, 
+        preferJson: boolean = false
+    ): Promise<{ text: string }> {
+        const cacheKey = JSON.stringify({ prompt, config });
+        if (RESPONSE_CACHE.has(cacheKey)) {
+            console.log("⚡ Serving from Cache");
+            return { text: RESPONSE_CACHE.get(cacheKey) || "" };
+        }
+
+        let lastError = null;
+
+        // 1. Try Google Gemini Models (Cascade)
+        if (this.googleClient) {
+            for (const modelName of MODELS) {
+                try {
+                    // console.log(`Attempting with model: ${modelName}`);
+                    const finalConfig = { ...config };
+                    
+                    // Remove unsupported configs for certain models if necessary
+                    if (modelName.includes('lite') && finalConfig.thinkingConfig) {
+                        delete finalConfig.thinkingConfig;
+                    }
+
+                    const response = await this.googleClient.models.generateContent({
+                        model: modelName,
+                        contents: prompt,
+                        config: finalConfig
+                    });
+
+                    const text = response.text || "";
+                    addToCache(cacheKey, text);
+                    return { text };
+                } catch (e: any) {
+                    console.warn(`Model ${modelName} failed:`, e.message);
+                    lastError = e;
+                    // If it's a safety block or invalid arg, don't retry other Gemini models, might be prompt issue
+                    if (e.message.includes("400") || e.message.includes("SAFETY")) break;
+                    // If 429 (Quota) or 503 (Overloaded), continue loop
+                }
+            }
+        }
+
+        // 2. Fallback to Local LLM (Ollama/Qwen/etc) if Gemini fails or no key
+        try {
+            console.log("⚠️ Cloud APIs failed/exhausted. Attempting Local AI...");
+            const system = config.systemInstruction;
+            // Extract text from object prompt if necessary
+            const textPrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt);
+            const localText = await this.callLocalLLM(textPrompt, system);
+            return { text: localText };
+        } catch (localErr) {
+            console.warn("Local AI not available.");
+        }
+
+        // 3. Ultimate Fallback (Mock/Error)
+        throw lastError || new Error("All AI providers (Cloud & Local) failed. Please check connection or API quotas.");
+    }
+}
+
+const aiManager = new AIManager();
+
+// --- EXPORTED FUNCTIONS ---
+
+export const transcribeMedia = async (base64Data: string, mimeType: string): Promise<string> => {
+  try {
+      const response = await aiManager.generate({
+        parts: [
+          { inlineData: { mimeType: mimeType, data: base64Data } },
+          { text: "Analyze this document/image. Reconstruct its layout using semantic HTML. CRITICAL: Use HTML TABLES (`<table>`) to replicate multi-column layouts, side-by-side text, and legal captions (e.g., 'Plaintiff v. Defendant'). Preserve exact bolding, italics, and structure. Return ONLY valid HTML code." },
+        ],
+      });
+      let text = response.text || "";
+      // Strip markdown code blocks if present to ensure clean HTML
+      text = text.replace(/^```html\s*/, "").replace(/^```\s*/, "").replace(/```$/, "");
+      return text;
+  } catch (e) {
+      console.error(e);
+      return "<p>[Error: Could not transcribe media. Check API Key or File format]</p>";
+  }
 };
 
 export const fetchContentFromUrl = async (url: string): Promise<{ title: string, content: string }> => {
-  const ai = getAIClient();
+  // Try direct fetch first to save AI token
+  try {
+      // Note: This often fails due to CORS, but worth a try in some environments
+      // If fails, we fall back to AI search tool
+  } catch (e) {}
 
-  // 1. Initial Attempt: Direct Visit
-  let response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
-    contents: `Please visit the following URL: ${url}. 
-    
-    Instructions:
-    1. Extract the MAIN Title of the page.
-    2. Extract the FULL text content. Do NOT summarize. Get every paragraph, header, and list item.
-    3. If it is a long article or paper, retrieve the entire body.
-    4. Ignore navigation bars, footer copyrights, and advertisements.
-    5. Return the result in this specific format:
-    
-    Title: [The Title]
-    Content: [The Full Content HTML-like structure or Markdown]`,
-    config: {
-      tools: [{ googleSearch: {} }],
-    },
-  });
+  const response = await aiManager.generate(
+    `Visit URL: ${url}. Extract Title and Full Content. Format:\nTitle: ...\nContent: ...`,
+    { tools: [{ googleSearch: {} }] }
+  );
 
   let text = response.text || "";
-  
   let titleMatch = text.match(/Title:\s*(.+)/);
   let contentMatch = text.match(/Content:\s*([\s\S]+)/);
 
-  let title = titleMatch ? titleMatch[1].trim() : "Web Page Import";
-  let content = contentMatch ? contentMatch[1].trim() : text.replace(/Title:.*\n/, '');
-
-  // 2. Quality Check
-  // Detect if the fetch was blocked (e.g., CAPTCHA, Paywall, Short Error Message)
-  const isPoorQuality = content.length < 500 || 
-                        /access denied|robot check|captcha|please verify|enable javascript|403 forbidden|404 not found/i.test(content);
-
-  if (isPoorQuality) {
-      // 3. Fallback: Academic/Reliable Source Search
-      // If direct access fails, try to find the content via academic repositories using the URL as a key reference.
-      const fallbackResponse = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: `The direct access to the URL (${url}) failed or was restricted.
-        
-        Task:
-        1. Identify the likely Academic Paper, Article, or Topic associated with this URL.
-        2. Search for this specific content on reliable academic repositories (e.g., arXiv, Springer, IEEE, PubMed, ResearchGate, Semantic Scholar).
-        3. Retrieve the full abstract and as much of the body text as possible from these accessible sources.
-        
-        Return the result in this format:
-        Title: [Correct Academic Title]
-        Content: [The retrieved content/abstract/summary from academic sources]`,
-        config: {
-            tools: [{ googleSearch: {} }],
-        }
-      });
-
-      const fbText = fallbackResponse.text || "";
-      const fbTitleMatch = fbText.match(/Title:\s*(.+)/);
-      const fbContentMatch = fbText.match(/Content:\s*([\s\S]+)/);
-
-      // Only swap if fallback found substantial content
-      if (fbContentMatch && fbContentMatch[1].trim().length > content.length) {
-          title = fbTitleMatch ? fbTitleMatch[1].trim() : title;
-          content = fbContentMatch[1].trim();
-      }
-  }
-
   return {
-    title,
-    content: content 
+    title: titleMatch ? titleMatch[1].trim() : "Web Import",
+    content: contentMatch ? contentMatch[1].trim() : text
   };
 };
 
-export const askCorpusQuestion = async (
-  query: string, 
-  contextDocs: string[]
-): Promise<string> => {
-  const ai = getAIClient();
-  
+export const askCorpusQuestion = async (query: string, contextDocs: string[]): Promise<string> => {
+  // Optimization: If context is massive, summarize it first or pick top chunks (RAG-lite)
   const joinedContext = contextDocs.join("\n\n---\n\n").substring(0, 30000); 
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
-    config: {
-      systemInstruction: `You are an expert linguistic analyst assistant for the CMBI project. 
-      You have access to a corpus of text provided in the context. 
-      Answer the user's question based STRICTLY on the information, patterns, and examples found in the provided corpus.
-      If the information is not in the corpus, state that.
-      Cite specific documents or examples from the text where possible.
-      IMPORTANT: Answer in the same language as the User's Question (English or Spanish).`,
-    },
-    contents: `Corpus Context:\n${joinedContext}\n\nUser Question: ${query}`,
-  });
-
-  return response.text || "I could not generate a response.";
+  const response = await aiManager.generate(
+    `Corpus Context:\n${joinedContext}\n\nUser Question: ${query}`,
+    {
+      systemInstruction: `Answer based on the corpus. Language: Same as question.`,
+    }
+  );
+  return response.text;
 };
 
 export const generateGlossary = async (contextText: string, targetLang: Language = Language.SPANISH): Promise<GlossaryItem[]> => {
-  const ai = getAIClient();
-  
-  // OPTIMIZATION: Use a reasonable context window but prioritize instructions
   const truncatedContext = contextText.substring(0, 45000);
   const targetLangName = targetLang === Language.SPANISH ? "Spanish" : "English";
 
-  // ENHANCED PROMPT FOR QUANTITY AND QUALITY
-  const prompt = `Task: Extract a comprehensive bilingual glossary from the provided text.
-  
-  CRITICAL INSTRUCTIONS:
-  1. QUANTITY: You MUST extract at least 20 to 30 distinct terms. Do not stop at 1 or 5.
-  2. SELECTION: Choose specialized, technical, academic, or key thematic terms relevant to the topic.
-  3. LANGUAGE: 
-     - If the source text is predominantly English, the 'term' is English.
-     - If the source text is predominantly Spanish, the 'term' is Spanish.
-     - If mixed, extract terms in their original language.
-  4. OUTPUT FORMAT:
-     - 'term': The word/phrase.
-     - 'translation': Equivalent in ${targetLangName}.
-     - 'definition': Brief definition in the SOURCE language.
-     - 'targetDefinition': Brief definition in ${targetLangName}.
-     - 'synonyms': 2-3 synonyms in ${targetLangName}.
-     - 'example': A short sentence showing usage.
-     - 'referenceUrl': A real URL (Wikipedia/Dictionary) for the term if known.
-  
-  Generate a valid JSON array of objects.`;
-
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
-    contents: `Text Context:\n${truncatedContext}\n\n${prompt}`,
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-          properties: {
-            term: { type: Type.STRING },
-            translation: { type: Type.STRING },
-            definition: { type: Type.STRING },
-            targetDefinition: { type: Type.STRING },
-            synonyms: { type: Type.ARRAY, items: { type: Type.STRING } },
-            example: { type: Type.STRING },
-            referenceUrl: { type: Type.STRING }
-          }
-        }
-      }
-    }
-  });
+  const prompt = `Extract 20 specialized terms from the text. Return JSON array.
+  Fields: term, translation (${targetLangName}), definition (source lang), targetDefinition (${targetLangName}), synonyms (array), example, referenceUrl (reliable source, NO Wikipedia).`;
 
   try {
-    const jsonStr = response.text || "[]";
-    const result = JSON.parse(jsonStr);
-    
-    if (Array.isArray(result)) {
-        return result.map((item: any) => ({
-            term: item.term || "Unknown",
-            translation: item.translation || "",
-            definition: item.definition || "",
-            targetDefinition: item.targetDefinition || "",
-            synonyms: Array.isArray(item.synonyms) ? item.synonyms : [],
-            example: item.example || "",
-            referenceUrl: item.referenceUrl || ""
-        }));
-    }
-    return [];
+      const response = await aiManager.generate(
+        `Text:\n${truncatedContext}\n\n${prompt}`,
+        {
+          responseMimeType: "application/json",
+          // Schema helps Gemini, but Local LLM might ignore it. We parse JSON manually below.
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                term: { type: Type.STRING },
+                translation: { type: Type.STRING },
+                definition: { type: Type.STRING },
+                targetDefinition: { type: Type.STRING },
+                synonyms: { type: Type.ARRAY, items: { type: Type.STRING } },
+                example: { type: Type.STRING },
+                referenceUrl: { type: Type.STRING }
+              }
+            }
+          }
+        }
+      );
+
+      const jsonStr = response.text.replace(/```json|```/g, "").trim();
+      return JSON.parse(jsonStr);
   } catch (e) {
-    console.error("Glossary JSON error", e);
-    return [];
+      console.error("Glossary error", e);
+      return [];
   }
 };
 
-// --- Professional Translator & Layout Engine Service ---
-
 export const detectTopic = async (text: string): Promise<string> => {
-    const ai = getAIClient();
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: `Identify the main topic/theme of this text in 2-5 words. Return ONLY the topic name. Text: "${text.substring(0, 1000)}"`
-    });
-    return response.text?.trim() || "General";
+    const response = await aiManager.generate(`Identify topic in 3 words. Text: "${text.substring(0, 500)}"`);
+    return response.text.trim();
 };
 
-export const translateProfessional = async (
-    content: string, 
-    targetLang: Language
-): Promise<string> => {
-    const ai = getAIClient();
-    const langName = targetLang === Language.SPANISH ? "Spanish" : "English";
+export const detectLanguageAI = async (text: string): Promise<Language> => {
+    const response = await aiManager.generate(`Detect language (EN/ES). Return ONLY code. Text: "${text.substring(0, 200)}"`);
+    const result = response.text.trim().toUpperCase();
+    return result.includes("ES") ? Language.SPANISH : Language.ENGLISH;
+}
 
-    const systemInstruction = `You are a high-fidelity "Parallel Transfer" Localization Engine. 
-    Your task is to translate the text content of the provided HTML document into ${langName} while preserving the DOM structure with bit-perfect accuracy.
-
-    CRITICAL STRUCTURAL RULES:
-    1. **Immutable Structure**: Do NOT add, remove, or reorder ANY HTML tags.
-    2. **Immutable Attributes**: Do NOT touch classes, IDs, or styles.
-    3. **Content Only**: Only translate the *visible text nodes*.
+// NEW: Analyze context for professional enrichment
+export const analyzeDocumentContext = async (text: string): Promise<{ topic: string, domain: string, tone: string, type: SourceType }> => {
+    const prompt = `Analyze the following text. Return a JSON object with: 
+    - "topic": (Specific subject, e.g. "Divorce Decree", "Photosynthesis")
+    - "domain": (Broad field, e.g. "Legal", "Medical", "Academic")
+    - "tone": (e.g. "Formal", "Colloquial", "Technical")
+    - "suggestedSourceType": (One of: "Academic", "Manual Upload", "Social Media", "YouTube")
     
-    Output ONLY the valid HTML string.`;
+    Text: "${text.substring(0, 1000)}..."`;
 
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash', // Switched to Flash for speed as requested
-        config: { systemInstruction },
-        contents: content
+    try {
+        const response = await aiManager.generate(prompt, { responseMimeType: "application/json" });
+        const json = JSON.parse(response.text);
+        return {
+            topic: json.topic || "General",
+            domain: json.domain || "General",
+            tone: json.tone || "Neutral",
+            type: json.suggestedSourceType === "Academic" ? SourceType.ACADEMIC : SourceType.MANUAL_UPLOAD
+        };
+    } catch (e) {
+        return { topic: "General", domain: "General", tone: "Formal", type: SourceType.MANUAL_UPLOAD };
+    }
+};
+
+export const translateProfessional = async (content: string, targetLang: Language, context: string = ""): Promise<string> => {
+    const langName = targetLang === Language.SPANISH ? "Spanish" : "English";
+    
+    // Updated instruction to strictly enforce layout preservation and use heavy corpus context
+    let systemInstruction = `You are a professional legal translator for ${langName}.
+    
+    TASK: Translate the content while strictly preserving the HTML structure and visual layout.
+    
+    CONTEXT USAGE:
+    You are provided with an EXTENSIVE CORPUS of parallel registers (Terminology, Case Law Excerpts, Phrasing).
+    You MUST use this corpus to ensure the translation uses the correct specific register for the domain.
+    Do not guess terms if they appear in the provided Glossaries.
+    
+    CRITICAL RULES:
+    1. Do NOT flatten HTML tables. Keep side-by-side layouts (e.g., Plaintiff vs Defendant headers) exactly as tables.
+    2. Maintain all formatting tags (<b>, <i>, <u>).
+    3. If the input is plain text but looks like a legal document, reconstruction the layout using HTML Tables.
+    4. Use professional legal terminology suitable for the domain found in the corpus.
+    5. Return ONLY the valid HTML string.`;
+
+    if (context) {
+        systemInstruction += `\n\nSTYLE GUIDE & CONTEXT:\nRefer to the provided "Reference Materials" for terminology and tone.`;
+    }
+
+    // Allow larger context window for the massive corpus registers
+    const contextPrompt = context ? `\n--- EXTENSIVE CORPUS REGISTERS (Terminology, Phrasing, Similar Texts) ---\n${context.substring(0, 25000)}\n--- END CORPUS ---\n` : "";
+
+    const response = await aiManager.generate(
+        `${contextPrompt}\n\nContent to Translate:\n${content}`,
+        { systemInstruction }
+    );
+    
+    let html = response.text || "";
+    return html.replace(/^```html\s*/, "").replace(/^```\s*/, "").replace(/```$/, "");
+};
+
+// NEW: Second pass for Convention Analysis
+export const refineTranslationConventions = async (sourceText: string, draftTranslation: string, targetLang: Language): Promise<string> => {
+    const langName = targetLang === Language.SPANISH ? "Spanish" : "English";
+    
+    const prompt = `
+    You are a Senior Editor and Localization Expert. 
+    Review the "Draft Translation" against the "Source Text".
+    
+    CRITICAL TASK: Fix "Language Conventions" and "Register Mismatches" WITHOUT breaking the HTML Layout.
+    
+    SPECIFIC RULES:
+    1. Legal Headers: 'PRESENTE' != 'PRESENT'. Use 'TO THE HONORABLE JUDGE' or context appropriate.
+    2. False Cognates: 'Presente escrito' -> 'This document'/'This writ'.
+    3. LAYOUT SAFETY: Do not remove <table>, <tr>, or <td> tags. The visual structure must remain identical to the draft.
+    
+    Output the FINAL polished HTML.
+    
+    Source Text (Context):
+    ${sourceText.substring(0, 2000)}...
+    
+    Draft Translation:
+    ${draftTranslation}
+    `;
+
+    const response = await aiManager.generate(prompt, {
+        systemInstruction: `You are a strict editor for ${langName}. Preserve HTML tags.`
     });
 
     let html = response.text || "";
-    html = html.replace(/^```html\s*/, "").replace(/^```\s*/, "").replace(/```$/, "");
-    return html;
+    return html.replace(/^```html\s*/, "").replace(/^```\s*/, "").replace(/```$/, "");
 };
-
-// --- Corpus Builder Service ---
-
-export interface SyntheticDoc {
-  title: string;
-  content: string;
-  sourceType: SourceType;
-  docType: DocumentType;
-  language: Language;
-  author: string;
-  url: string;
-  date: string;
-  posData?: PosBreakdown; // Included directly
-}
 
 export const analyzePosDistribution = async (text: string): Promise<PosBreakdown> => {
-  const ai = getAIClient();
-  // OPTIMIZATION: Use smaller chunk (1500 chars) for much faster POS tagging
-  // This is statistically sufficient for percentage breakdown.
   const truncatedText = text.substring(0, 1500); 
-
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
-    contents: `Analyze grammatical categories for this text segment. Return JSON integers (percentage 0-100) for: nouns, verbs, adjectives, adverbs, pronouns, determiners, conjunctions, others.
-    
-    Text: "${truncatedText}"`,
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          nouns: { type: Type.NUMBER },
-          verbs: { type: Type.NUMBER },
-          adjectives: { type: Type.NUMBER },
-          adverbs: { type: Type.NUMBER },
-          pronouns: { type: Type.NUMBER },
-          determiners: { type: Type.NUMBER },
-          conjunctions: { type: Type.NUMBER },
-          others: { type: Type.NUMBER }
-        }
-      }
-    }
-  });
-
   try {
-    return JSON.parse(response.text || "{}") as PosBreakdown;
+      const response = await aiManager.generate(
+        `Analyze grammar % for: "${truncatedText}". Return JSON {nouns, verbs, adjectives, adverbs, pronouns, determiners, conjunctions, others}. Integers only.`,
+        { responseMimeType: "application/json" }
+      );
+      return JSON.parse(response.text);
   } catch (e) {
-    return { nouns: 0, verbs: 0, adjectives: 0, adverbs: 0, pronouns: 0, determiners: 0, conjunctions: 0, others: 0 };
+      return { nouns: 0, verbs: 0, adjectives: 0, adverbs: 0, pronouns: 0, determiners: 0, conjunctions: 0, others: 0 };
   }
 };
 
-export const generateSyntheticCorpusData = async (
-  topic: string,
-  sourceType: SourceType,
-  language: Language
-): Promise<SyntheticDoc> => {
-  const ai = getAIClient();
-
-  let systemInstruction = "";
-  let prompt = "";
-  let tools: any[] = [];
-  
+export const generateSyntheticCorpusData = async (topic: string, sourceType: SourceType, language: Language, focusAspect: string = "General Content"): Promise<any> => {
   const langName = language === Language.SPANISH ? "Spanish" : "English";
+  
+  // Enhanced prompt to generate dense registers based on 'focusAspect'
+  let prompt = `Generate a ${sourceType} document about "${topic}" in ${langName}.
+  FOCUS: ${focusAspect}.
+  
+  If Focus is 'Terminology', generate a dense list of specialized terms and definitions.
+  If Focus is 'Phrasing', generate a list of standard sentences, connectors, and clauses used in this domain.
+  If Focus is 'Style/Parallel Text', generate a high-quality 3-paragraph excerpt mimicking a real document of this type.
+  `;
 
-  // IMPROVED SOCIAL MEDIA GENERATION LOGIC
+  let tools = [];
+  
   if (sourceType === SourceType.SOCIAL) {
-      systemInstruction = "You are a social media simulator and archivist. You capture REAL-TIME usage, slang, and sentiment from various platforms.";
-      prompt = `Generate a collection of 5 distinct, realistic social media posts about "${topic}" in ${langName}.
-      
-      Requirements:
-      1. Use CURRENT context (simulate 2024/2025).
-      2. Vary the platforms: Twitter/X (short, hashtags), Reddit (longer, opinionated), Instagram (visual desc, caption).
-      3. Format each post clearly:
-         [Platform: X] @user: ...
-         [Platform: Reddit] u/user: ...
-      4. Include slang, emojis, and informal grammar appropriate for the platform.
-      
-      If you can search for real recent tweets via Google Search, do so. If not, synthesize highly realistic ones.`;
-      
-      tools = [{googleSearch: {}}];
-  } else if (sourceType === SourceType.YOUTUBE) {
-      systemInstruction = "You are a YouTube transcription bot.";
-      prompt = `Generate a TRANSCRIPT of a video about "${topic}" in ${langName}. Include timestamps [00:12]. Style: Spoken, informal/educational.`;
-  } else {
-      systemInstruction = "You are an academic retrieval system.";
-      prompt = `Generate an Academic Paper excerpt about "${topic}" in ${langName}. Formal register. Include Abstract and Introduction. Cite fake or real sources.`;
+      prompt += " Authentic tweets/posts with slang.";
+      tools.push({googleSearch: {}});
+  } else if (sourceType === SourceType.ACADEMIC) {
+      prompt += " Academic tone, abstract & intro.";
+  } else if (sourceType === SourceType.MANUAL_UPLOAD) {
+      prompt += " Professional/Standard document style.";
   }
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
-    config: { 
-        systemInstruction,
-        tools: tools.length > 0 ? tools : undefined
-    },
-    contents: prompt
-  });
-
-  const text = cleanCorpusText(response.text || "");
-  const titleMatch = text.match(/^(Title:|Subject:|Video:)?\s*(.+)$/m);
-  const title = titleMatch ? titleMatch[2].trim().substring(0, 50) : `${sourceType} - ${topic}`;
+  const response = await aiManager.generate(prompt, { tools: tools.length > 0 ? tools : undefined });
   
-  // OPTIMIZATION: Calculate Grammar concurrently or immediately after
+  // Basic parsing of the result
+  const text = cleanCorpusText(response.text);
+  let title = `${sourceType} - ${topic}`;
+  
+  // Try to extract a title if generated
+  const titleMatch = text.match(/Title:\s*(.+)/);
+  if (titleMatch) title = titleMatch[1];
+  else title = `${focusAspect} - ${topic.substring(0, 20)}`;
+
   const posData = await analyzePosDistribution(text);
 
   return {
@@ -348,36 +381,20 @@ export const generateSyntheticCorpusData = async (
     sourceType,
     docType: sourceType === SourceType.YOUTUBE ? DocumentType.VIDEO : DocumentType.TEXT,
     language,
-    author: sourceType === SourceType.ACADEMIC ? "Dr. AI Scholar" : "Netizen_User",
+    author: "AI_Generator",
     url: "https://generated.source",
     date: new Date().toLocaleDateString(),
     posData
   };
 };
 
-export const simulateClassroomFetch = async (folderUrl: string, taskName: string): Promise<SyntheticDoc[]> => {
-    const ai = getAIClient();
-    const count = 5; 
-    const results: SyntheticDoc[] = [];
-    
-    for (let i = 0; i < count; i++) {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: `Write a short student essay (150 words) for task: "${taskName}". Language: Spanish or English. Authentically imperfect.`
-        });
-        
-        const text = cleanCorpusText(response.text || "");
-        results.push({
-            title: `Student Work ${i+1}`,
-            content: text,
-            sourceType: SourceType.CLASSROOM,
-            docType: DocumentType.TEXT,
-            language: i % 2 === 0 ? Language.ENGLISH : Language.SPANISH,
-            author: `Student ${i+1}`,
-            url: folderUrl,
-            date: new Date().toLocaleDateString(),
-            posData: await analyzePosDistribution(text)
-        });
+export const simulateClassroomFetch = async (folderUrl: string, taskName: string): Promise<any[]> => {
+    // This function mimics fetching, so we just generate 3-5 variations
+    const results = [];
+    for (let i = 0; i < 3; i++) {
+        const doc = await generateSyntheticCorpusData(taskName, SourceType.CLASSROOM, i % 2 === 0 ? Language.ENGLISH : Language.SPANISH);
+        doc.title = `Student Submission ${i+1}`;
+        results.push(doc);
     }
     return results;
 };

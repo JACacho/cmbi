@@ -1,8 +1,7 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { ArrowRight, Upload, RefreshCw, Sparkles, FileDown, Image as ImageIcon, FileType, Globe, Link, Loader2, ArrowDownCircle, Database, BookOpen, Eye, EyeOff, Split, Layers, Wand2 } from 'lucide-react';
 import { CorpusDocument, DocumentType, Language, SourceType, GlossaryItem } from '../types';
-import { translateProfessional, transcribeMedia, fetchContentFromUrl, generateGlossary, analyzePosDistribution, generateSyntheticCorpusData } from '../services/geminiService';
+import { translateProfessional, refineTranslationConventions, transcribeMedia, fetchContentFromUrl, generateGlossary, analyzePosDistribution, generateSyntheticCorpusData, detectLanguageAI, analyzeDocumentContext } from '../services/geminiService';
 import { translations } from '../utils/translations';
 import { analyzeSentiment, tokenize, cleanCorpusText, splitIntoChunks } from '../utils/nlp';
 // @ts-ignore
@@ -37,10 +36,12 @@ const TranslatorView: React.FC<TranslatorViewProps> = ({
   
   // Local UI state
   const [showSourcePreview, setShowSourcePreview] = useState(false);
+  const [sourceLangMode, setSourceLangMode] = useState<'AUTO' | Language>('AUTO');
   const [targetLang, setTargetLang] = useState<Language>(Language.SPANISH);
   const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState('');
   const [autoPipelineDone, setAutoPipelineDone] = useState(false);
+  const [currentDocTitle, setCurrentDocTitle] = useState('Document'); // Track source filename
   
   // Drag and Drop State
   const [isDragging, setIsDragging] = useState(false);
@@ -62,11 +63,11 @@ const TranslatorView: React.FC<TranslatorViewProps> = ({
   const runFullPipeline = async (rawInput: string, docTitle: string, sourceType: SourceType, detectedHtml: boolean = false) => {
       setIsProcessing(true);
       setAutoPipelineDone(false);
+      setCurrentDocTitle(docTitle); // Save title for export
       
       let contentToTranslate = rawInput;
       let finalTitle = docTitle;
-      let finalSourceType = sourceType;
-
+      
       // 1. URL Detection
       if (rawInput.trim().match(/^https?:\/\/[^\s]+$/)) {
           setStatus("Fetching Full URL Content...");
@@ -74,7 +75,7 @@ const TranslatorView: React.FC<TranslatorViewProps> = ({
               const fetched = await fetchContentFromUrl(rawInput.trim());
               contentToTranslate = `<h1>${fetched.title}</h1>\n${fetched.content}`;
               finalTitle = fetched.title;
-              finalSourceType = SourceType.ACADEMIC;
+              setCurrentDocTitle(fetched.title);
               setExternalSourceText(contentToTranslate); 
               setShowSourcePreview(true);
               detectedHtml = true;
@@ -96,7 +97,77 @@ const TranslatorView: React.FC<TranslatorViewProps> = ({
       const plainTextSource = detectedHtml ? stripHtml(contentToTranslate) : contentToTranslate;
 
       try {
-          // 2. Image Protection & Translation
+          // 2. Language Detection & Setup
+          setStatus("Detecting Source Language...");
+          let detectedSourceLang = sourceLangMode === 'AUTO' 
+              ? await detectLanguageAI(plainTextSource) 
+              : sourceLangMode;
+          
+          let finalTargetLang = targetLang;
+
+          // AUTO-FLIP: If Source is same as Target, Flip Target.
+          if (detectedSourceLang === targetLang) {
+              finalTargetLang = targetLang === Language.SPANISH ? Language.ENGLISH : Language.SPANISH;
+              setTargetLang(finalTargetLang);
+              console.log(`Auto-flipped target to ${finalTargetLang} because source was ${detectedSourceLang}`);
+          }
+
+          // 3. CONTEXT & CORPUS ENRICHMENT (DEEP MINING MODE)
+          setStatus("Analyzing Document Context & Domain...");
+          const contextAnalysis = await analyzeDocumentContext(plainTextSource);
+          const { topic, domain, tone, type: suggestedType } = contextAnalysis;
+          console.log("Context Analysis:", contextAnalysis);
+          
+          let referenceContext = "";
+          const enrichmentDocs: CorpusDocument[] = [];
+          
+          if (onDocsGenerated) {
+              // Create 3 specific aspects to generate a dense, multi-register corpus
+              const aspects = [
+                  "Specialized Terminology & Glossary", // Register 1: Lexicon
+                  "Standard Legal Clauses & Phrasing",  // Register 2: Phraseology
+                  "Parallel Text & Tone Samples"        // Register 3: Style
+              ];
+
+              for (let i = 0; i < aspects.length; i++) {
+                  const aspect = aspects[i];
+                  setStatus(`Mining Corpus [${i+1}/3]: Fetching ${aspect} for ${domain}...`);
+                  
+                  try {
+                      // Generate Source Lang Reference
+                      const refSource = await generateSyntheticCorpusData(`${topic} (${domain})`, suggestedType, detectedSourceLang, aspect);
+                      // Generate Target Lang Reference
+                      const refTarget = await generateSyntheticCorpusData(`${topic} (${domain})`, suggestedType, finalTargetLang, aspect);
+                      
+                      referenceContext += `\n--- REGISTER GROUP ${i+1}: ${aspect} ---\nSource (${detectedSourceLang}):\n${refSource.content}\n\nTarget (${finalTargetLang}):\n${refTarget.content}\n`;
+                      
+                      // Add to UI Corpus
+                      [refSource, refTarget].forEach((ref, idx) => {
+                           enrichmentDocs.push({
+                               id: `ref-ctx-${Date.now()}-${i}-${idx}`,
+                               title: `[Ref: ${aspect}] ${ref.title}`,
+                               content: ref.content,
+                               language: ref.language,
+                               type: DocumentType.TEXT,
+                               sourceType: SourceType.GENERATED,
+                               tokenCount: tokenize(ref.content).length,
+                               uploadDate: ref.date,
+                               sentiment: analyzeSentiment(ref.content, ref.language),
+                               posData: ref.posData
+                           });
+                      });
+                  } catch (e) {
+                      console.warn(`Enrichment pass ${i} failed`, e);
+                  }
+              }
+              
+              if (enrichmentDocs.length > 0) {
+                  onDocsGenerated(enrichmentDocs);
+                  setStatus(`Enriched Corpus with ${enrichmentDocs.length} new registers.`);
+              }
+          }
+
+          // 4. Image Protection & Translation
           setStatus("Processing Images & Layout...");
           
           // IMAGE PROTECTION ALGORITHM
@@ -111,24 +182,28 @@ const TranslatorView: React.FC<TranslatorViewProps> = ({
               });
           }
 
-          setStatus(`Translating to ${targetLang} (Preserving Layout)...`);
-          let htmlResult = await translateProfessional(protectedContent, targetLang);
+          setStatus(`Translating to ${finalTargetLang} using Domain Context: ${domain}...`);
+          // Pass the generated reference context to the translator
+          let draftHtml = await translateProfessional(protectedContent, finalTargetLang, referenceContext);
+          
+          // 5. CONVENTION REFINEMENT
+          setStatus("Refining Language Conventions (e.g., Legal Headers)...");
+          let finalHtml = await refineTranslationConventions(protectedContent, draftHtml, finalTargetLang);
 
           // RESTORE IMAGES
           imageMap.forEach((originalTag, placeholder) => {
-              htmlResult = htmlResult.replace(placeholder, originalTag);
+              finalHtml = finalHtml.replace(placeholder, originalTag);
           });
 
-          setExternalResultHtml(htmlResult);
+          setExternalResultHtml(finalHtml);
 
-          // 3. Advanced Corpus Registration (Dual Entry: Source & Target)
+          // 6. Corpus Registration (Source & Target)
           if (onDocsGenerated) {
-              const sourceLang = targetLang === Language.SPANISH ? Language.ENGLISH : Language.SPANISH;
+              setStatus("Registering translation in Corpus...");
               const docsToAdd: CorpusDocument[] = [];
               const pairId = `pair-${Date.now()}`;
 
               // --- A. Source Document (Original) ---
-              setStatus("Analyzing Source Grammar (POS)...");
               let sourcePos = undefined;
               try { sourcePos = await analyzePosDistribution(plainTextSource); } catch(e){}
               
@@ -139,22 +214,21 @@ const TranslatorView: React.FC<TranslatorViewProps> = ({
                   parallelId: pairId,
                   title: `[Source] ${finalTitle}`,
                   content: cleanedSourceForCorpus,
-                  language: sourceLang,
+                  language: detectedSourceLang,
                   type: DocumentType.TEXT,
-                  sourceType: finalSourceType,
+                  sourceType: suggestedType, // Use detected type
                   tokenCount: tokenize(cleanedSourceForCorpus).length,
                   uploadDate: new Date().toLocaleDateString(),
-                  sentiment: analyzeSentiment(cleanedSourceForCorpus, sourceLang),
+                  sentiment: analyzeSentiment(cleanedSourceForCorpus, detectedSourceLang),
                   posData: sourcePos,
                   originalFileName: docTitle
               };
               docsToAdd.push(sourceDoc);
 
               // --- B. Target Document (Translated) ---
-              const plainTextTarget = stripHtml(htmlResult); // Strip HTML from result too
+              const plainTextTarget = stripHtml(finalHtml); // Strip HTML from result too
               const cleanedTargetForCorpus = cleanCorpusText(plainTextTarget);
               
-              setStatus("Analyzing Target Grammar (POS)...");
               let targetPos = undefined;
               try { targetPos = await analyzePosDistribution(cleanedTargetForCorpus); } catch(e){}
 
@@ -163,68 +237,32 @@ const TranslatorView: React.FC<TranslatorViewProps> = ({
                   parallelId: pairId,
                   title: `[Trans] ${finalTitle}`,
                   content: cleanedTargetForCorpus,
-                  language: targetLang,
+                  language: finalTargetLang,
                   type: DocumentType.TEXT,
                   sourceType: SourceType.GENERATED, // It's AI generated translation
                   tokenCount: tokenize(cleanedTargetForCorpus).length,
                   uploadDate: new Date().toLocaleDateString(),
-                  sentiment: analyzeSentiment(cleanedTargetForCorpus, targetLang),
+                  sentiment: analyzeSentiment(cleanedTargetForCorpus, finalTargetLang),
                   posData: targetPos,
                   originalFileName: `Translated_${docTitle}`
               };
               docsToAdd.push(targetDoc);
 
-              // --- C. Augmentation (Synthetic Data Loop) ---
-              // AUTOMATION: Search for MORE records relative to the topic.
-              // We generate 4 distinct synthetic documents to ensure corpus > 3 records.
-              try {
-                  setStatus("Expanding Corpus Context (Auto-Research: >3 Docs)...");
-                  const topic = finalTitle.substring(0, 40);
-                  const augmentationCount = 4; // Generate 4 extra docs to satisfy requirement (>3)
-
-                  for(let i = 0; i < augmentationCount; i++) {
-                    // Alternate sources for variety
-                    const mixSource = i % 2 === 0 ? SourceType.ACADEMIC : SourceType.SOCIAL;
-                    
-                    const summaryDoc = await generateSyntheticCorpusData(topic, mixSource, sourceLang);
-                    summaryDoc.title = `Auto-Context ${i+1}: ${topic}`;
-                    
-                    docsToAdd.push({
-                        id: `syn-ctx-${Date.now()}-${i}`,
-                        title: summaryDoc.title,
-                        content: summaryDoc.content,
-                        language: summaryDoc.language,
-                        type: DocumentType.TEXT,
-                        sourceType: SourceType.GENERATED,
-                        tokenCount: tokenize(summaryDoc.content).length,
-                        uploadDate: summaryDoc.date,
-                        sentiment: analyzeSentiment(summaryDoc.content, summaryDoc.language),
-                        posData: await analyzePosDistribution(summaryDoc.content),
-                        sourceUrl: summaryDoc.url,
-                        author: summaryDoc.author
-                    });
-                  }
-              } catch (err) {
-                  console.warn("Augmentation minor error", err);
-              }
-
               onDocsGenerated(docsToAdd);
           }
 
-          // 4. Glossary Generation (Enhanced - AUTO FILL)
-          // This is now guaranteed to run for every translation
+          // 7. Glossary Generation (Enhanced - AUTO FILL)
           if (onGlossaryGenerated) {
               setStatus("Auto-Generating Glossary from Corpus...");
-              // Use source text for glossary extraction, PASS TARGET LANG for definitions
               try {
-                  const glossaryItems = await generateGlossary(plainTextSource, targetLang);
+                  const glossaryItems = await generateGlossary(plainTextSource, finalTargetLang);
                   onGlossaryGenerated(glossaryItems);
               } catch (err) {
                   console.error("Glossary generation failed", err);
               }
           }
 
-          setStatus("Pipeline Complete.");
+          setStatus("Pipeline Complete. Reviewed for Conventions.");
           setAutoPipelineDone(true);
       } catch (error) {
           console.error("Pipeline Error", error);
@@ -239,7 +277,7 @@ const TranslatorView: React.FC<TranslatorViewProps> = ({
 
   const handleManualTranslate = () => {
       if (!externalSourceText) return;
-      runFullPipeline(externalSourceText, "Manual Input", SourceType.MANUAL_UPLOAD, isHtml(externalSourceText));
+      runFullPipeline(externalSourceText, "Manual_Input", SourceType.MANUAL_UPLOAD, isHtml(externalSourceText));
   };
 
   const processFile = async (file: File) => {
@@ -314,7 +352,8 @@ const TranslatorView: React.FC<TranslatorViewProps> = ({
                 if (file.name.endsWith('.pdf')) mimeType = 'application/pdf';
 
                 const extracted = await transcribeMedia(base64, mimeType);
-                runFullPipeline(extracted, file.name, SourceType.MANUAL_UPLOAD, false);
+                // Now explicitly treat transcription as HTML because transcribeMedia returns HTML
+                runFullPipeline(extracted, file.name, SourceType.MANUAL_UPLOAD, true);
             } catch (err: any) {
                 console.error("Extraction Error", err);
                 let msg = "Error analyzing file.";
@@ -359,12 +398,18 @@ const TranslatorView: React.FC<TranslatorViewProps> = ({
 
   // --- Export Functions ---
 
+  const getCleanFilename = (suffix: string, ext: string) => {
+      // Remove original extension if present
+      const cleanName = currentDocTitle.replace(/\.[^/.]+$/, "").replace(/[^a-z0-9-_]/gi, '_').substring(0, 30);
+      return `${cleanName}_${suffix}_${targetLang}.${ext}`;
+  };
+
   const downloadAsImage = async () => {
     if (!resultRef.current) return;
     try {
         const dataUrl = await toPng(resultRef.current, { quality: 0.95, backgroundColor: '#ffffff' });
         const link = document.createElement('a');
-        link.download = 'translation_export.png';
+        link.download = getCleanFilename('Traduccion', 'png');
         link.href = dataUrl;
         link.click();
     } catch (err) {
@@ -378,7 +423,7 @@ const TranslatorView: React.FC<TranslatorViewProps> = ({
       if (!printContent) return;
       const win = window.open('', '', 'height=800,width=1000');
       if (!win) return;
-      win.document.write(`<html><head><title>Translated</title><style>body{font-family:serif;padding:40px;line-height:1.6}img{max-width:100%}</style></head><body>${printContent.innerHTML}</body></html>`);
+      win.document.write(`<html><head><title>${currentDocTitle} - Translated</title><style>body{font-family:serif;padding:40px;line-height:1.6}img{max-width:100%}</style></head><body>${printContent.innerHTML}</body></html>`);
       win.document.close();
       win.focus();
       setTimeout(() => { win.print(); win.close(); }, 500);
@@ -386,12 +431,50 @@ const TranslatorView: React.FC<TranslatorViewProps> = ({
 
   const downloadAsDocx = () => {
      if (!externalResultHtml) return;
-     const header = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word'><head><meta charset='utf-8'><title>Trans</title></head><body>`;
+     
+     // Enhanced Word-compatible HTML wrapper
+     const header = `
+     <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+     <head>
+        <meta charset='utf-8'>
+        <title>${currentDocTitle}</title>
+        <!--[if gte mso 9]>
+        <xml>
+        <w:WordDocument>
+        <w:View>Print</w:View>
+        <w:Zoom>100</w:Zoom>
+        <w:DoNotOptimizeForBrowser/>
+        </w:WordDocument>
+        </xml>
+        <![endif]-->
+        <style>
+            @page {
+                size: 21.59cm 27.94cm;
+                margin: 2.54cm 2.54cm 2.54cm 2.54cm;
+                mso-page-orientation: portrait;
+            }
+            body {
+                font-family: 'Times New Roman', serif;
+                font-size: 12pt;
+                line-height: 1.5;
+            }
+            table {
+                border-collapse: collapse;
+                width: 100%;
+            }
+            td {
+                vertical-align: top;
+                padding: 5px;
+            }
+        </style>
+     </head>
+     <body>`;
+     
      const footer = "</body></html>";
      const source = 'data:application/vnd.ms-word;charset=utf-8,' + encodeURIComponent(header + externalResultHtml + footer);
      const link = document.createElement("a");
      link.href = source;
-     link.download = 'translation.doc';
+     link.download = getCleanFilename('Traduccion', 'doc');
      link.click();
   };
 
@@ -400,27 +483,38 @@ const TranslatorView: React.FC<TranslatorViewProps> = ({
         {/* Source Column */}
         <div className="flex-1 flex flex-col space-y-4 min-w-0">
             <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                <div className="flex justify-between items-center mb-4">
-                     <div className="flex items-center gap-2">
+                <div className="flex flex-col gap-3">
+                     <div className="flex justify-between items-center">
                          <h3 className="font-semibold text-slate-800">{t.sourceContent}</h3>
+                         <div className="flex gap-1 bg-slate-100 p-1 rounded-lg">
+                             <button onClick={() => setInputType('FILE')} className={`p-1.5 rounded-md transition-colors ${inputType === 'FILE' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>
+                                 <Upload className="w-4 h-4" />
+                             </button>
+                             <button onClick={() => setInputType('URL')} className={`p-1.5 rounded-md transition-colors ${inputType === 'URL' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>
+                                 <Globe className="w-4 h-4" />
+                             </button>
+                         </div>
+                     </div>
+                     <div className="flex items-center gap-2">
+                         <span className="text-xs text-slate-500">From:</span>
+                         <select 
+                            value={sourceLangMode}
+                            onChange={(e) => setSourceLangMode(e.target.value as 'AUTO' | Language)}
+                            className="text-xs bg-slate-50 border border-slate-300 rounded px-2 py-1 focus:ring-2 focus:ring-indigo-500"
+                         >
+                            <option value="AUTO">Auto-Detect</option>
+                            <option value={Language.ENGLISH}>English</option>
+                            <option value={Language.SPANISH}>Español</option>
+                         </select>
                          {externalSourceText && (
                              <button 
                                 onClick={() => setShowSourcePreview(!showSourcePreview)}
-                                className="text-xs flex items-center gap-1 px-2 py-1 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 transition-colors"
-                                title="Toggle Source Preview"
+                                className="ml-auto text-xs flex items-center gap-1 px-2 py-1 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 transition-colors"
                              >
                                 {showSourcePreview ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
                                 {showSourcePreview ? "Preview" : "Editor"}
                              </button>
                          )}
-                     </div>
-                     <div className="flex gap-1 bg-slate-100 p-1 rounded-lg">
-                         <button onClick={() => setInputType('FILE')} className={`p-1.5 rounded-md transition-colors ${inputType === 'FILE' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>
-                             <Upload className="w-4 h-4" />
-                         </button>
-                         <button onClick={() => setInputType('URL')} className={`p-1.5 rounded-md transition-colors ${inputType === 'URL' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>
-                             <Globe className="w-4 h-4" />
-                         </button>
                      </div>
                 </div>
 
@@ -429,7 +523,7 @@ const TranslatorView: React.FC<TranslatorViewProps> = ({
                         onDragOver={onDragOver}
                         onDragLeave={onDragLeave}
                         onDrop={onDrop}
-                        className={`border-2 border-dashed rounded-lg p-4 text-center transition-colors ${isDragging ? 'border-indigo-500 bg-indigo-50' : 'border-slate-300 bg-slate-50'}`}
+                        className={`mt-4 border-2 border-dashed rounded-lg p-4 text-center transition-colors ${isDragging ? 'border-indigo-500 bg-indigo-50' : 'border-slate-300 bg-slate-50'}`}
                     >
                         {isDragging ? (
                             <div className="text-indigo-600 py-2 flex flex-col items-center gap-2">
@@ -493,13 +587,13 @@ const TranslatorView: React.FC<TranslatorViewProps> = ({
                 <ArrowRight className="w-6 h-6 rotate-90 lg:hidden" />
             </button>
             {isProcessing && (
-                <div className="flex flex-col gap-2 text-[10px] text-indigo-600 font-semibold text-center">
-                    <span className="flex items-center gap-1 bg-indigo-50 px-2 py-1 rounded justify-center"><RefreshCw className="w-3 h-3 animate-spin" /> Processing...</span>
-                    <span className="flex items-center gap-1 bg-indigo-50 px-2 py-1 rounded justify-center"><Wand2 className="w-3 h-3" /> Layout Engine</span>
+                <div className="flex flex-col gap-2 text-[10px] text-indigo-600 font-semibold text-center bg-white p-2 rounded shadow-sm border border-indigo-100">
+                    <span className="flex items-center gap-1 justify-center"><RefreshCw className="w-3 h-3 animate-spin" /> Processing</span>
+                    <span className="text-xs opacity-75">Step: {status.split('...')[0]}</span>
                 </div>
             )}
             {autoPipelineDone && (
-                <span className="text-[10px] bg-green-50 text-green-600 px-2 py-1 rounded font-bold">All Done!</span>
+                <span className="text-[10px] bg-green-50 text-green-600 px-2 py-1 rounded font-bold">Reviewed ✓</span>
             )}
         </div>
 
@@ -510,47 +604,124 @@ const TranslatorView: React.FC<TranslatorViewProps> = ({
                     <h3 className="font-semibold text-slate-800">{t.targetContent}</h3>
                     {isProcessing && (
                         <span className="text-xs bg-indigo-50 text-indigo-600 px-2 py-1 rounded-full animate-pulse flex items-center gap-1">
-                            <Sparkles className="w-3 h-3" /> {status}
+                            <Sparkles className="w-3 h-3" /> Working...
                         </span>
                     )}
                 </div>
-                <select 
-                    value={targetLang}
-                    onChange={(e) => setTargetLang(e.target.value as Language)}
-                    className="bg-slate-100 border border-slate-300 rounded-lg px-2 py-1 text-sm font-medium focus:ring-2 focus:ring-indigo-500"
-                >
-                    <option value={Language.SPANISH}>Español</option>
-                    <option value={Language.ENGLISH}>English</option>
-                </select>
+                <div className="flex items-center gap-2">
+                     <span className="text-xs text-slate-500">To:</span>
+                     <select 
+                        value={targetLang}
+                        onChange={(e) => setTargetLang(e.target.value as Language)}
+                        className="bg-slate-100 border border-slate-300 rounded-lg px-2 py-1 text-sm font-medium focus:ring-2 focus:ring-indigo-500"
+                    >
+                        <option value={Language.SPANISH}>Español</option>
+                        <option value={Language.ENGLISH}>English</option>
+                    </select>
+                </div>
             </div>
             
             {/* Preview Area */}
             <div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col min-h-[400px] overflow-hidden relative">
                 {isProcessing && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center text-indigo-400 bg-white/80 z-20 backdrop-blur-sm">
+                    <div className="absolute inset-0 flex flex-col items-center justify-center text-indigo-400 bg-white/90 z-20 backdrop-blur-sm p-4 text-center">
                         <Loader2 className="w-10 h-10 animate-spin mb-3" />
                         <p className="text-sm font-medium animate-pulse">{status}</p>
+                        <p className="text-xs text-slate-400 mt-2">Checking corpus, enriching context, and reviewing conventions...</p>
                     </div>
                 )}
 
                 <div className="flex-1 p-0 overflow-y-auto bg-slate-100 relative">
                      <style>{`
-                        .document-view { font-family: 'Times New Roman', serif; color: #000; line-height: 1.6; }
-                        .document-view h1 { font-size: 2em; font-weight: bold; margin: 0.67em 0; border-bottom: 1px solid #eee; }
-                        .document-view h2 { font-size: 1.5em; font-weight: bold; margin: 0.75em 0; }
-                        .document-view p { margin: 1em 0; }
-                        .document-view ul { list-style-type: disc; padding-left: 40px; margin: 1em 0; }
-                        .document-view ol { list-style-type: decimal; padding-left: 40px; margin: 1em 0; }
-                        .document-view table { border-collapse: collapse; width: 100%; margin: 1em 0; }
-                        .document-view td, .document-view th { border: 1px solid #ccc; padding: 8px; vertical-align: top; }
-                        .document-view th { background-color: #f5f5f5; font-weight: bold; }
-                        .document-view img { max-width: 100%; height: auto; display: block; margin: 10px auto; border: 1px solid #ddd; }
+                        /* Professional Document Layout Styles */
+                        .document-view { 
+                            font-family: 'Merriweather', 'Georgia', 'Times New Roman', serif; 
+                            color: #1a1a1a; 
+                            line-height: 1.8; 
+                            font-size: 11pt;
+                            box-sizing: border-box;
+                        }
+                        
+                        /* Headers */
+                        .document-view h1, .document-view h2, .document-view h3, .document-view h4 {
+                            font-family: 'Inter', 'Segoe UI', sans-serif;
+                            font-weight: 700;
+                            color: #0f172a;
+                            margin-top: 1.5em;
+                            margin-bottom: 0.8em;
+                            line-height: 1.3;
+                        }
+                        .document-view h1 { font-size: 24pt; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px; }
+                        .document-view h2 { font-size: 18pt; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; }
+                        .document-view h3 { font-size: 14pt; }
+                        
+                        /* Body Text */
+                        .document-view p { margin-bottom: 1.2em; text-align: justify; }
+                        
+                        /* Lists */
+                        .document-view ul, .document-view ol { margin: 1em 0; padding-left: 2em; }
+                        .document-view li { margin-bottom: 0.5em; }
+                        
+                        /* Blockquotes */
+                        .document-view blockquote {
+                            border-left: 4px solid #6366f1;
+                            background: #f8fafc;
+                            padding: 1em 1.5em;
+                            margin: 1.5em 0;
+                            font-style: italic;
+                            color: #475569;
+                            border-radius: 0 8px 8px 0;
+                        }
+                        
+                        /* Tables */
+                        .document-view table { 
+                            border-collapse: collapse; 
+                            width: 100%; 
+                            margin: 1.5em 0; 
+                            font-size: 0.95em;
+                            border: 1px solid #cbd5e1;
+                        }
+                        .document-view th { 
+                            background-color: #f1f5f9; 
+                            color: #334155; 
+                            font-weight: 600; 
+                            padding: 12px; 
+                            text-align: left;
+                            border-bottom: 2px solid #cbd5e1;
+                        }
+                        .document-view td { 
+                            padding: 10px; 
+                            border-bottom: 1px solid #e2e8f0;
+                            vertical-align: top;
+                        }
+                        .document-view tr:nth-child(even) { background-color: #f8fafc; }
+                        
+                        /* Images */
+                        .document-view img { 
+                            max-width: 100%; 
+                            height: auto; 
+                            display: block; 
+                            margin: 20px auto; 
+                            border-radius: 4px;
+                            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); 
+                        }
+                        
+                        /* Code Blocks */
+                        .document-view pre {
+                            background: #1e293b;
+                            color: #f1f5f9;
+                            padding: 1em;
+                            border-radius: 8px;
+                            overflow-x: auto;
+                            font-family: 'Consolas', 'Monaco', monospace;
+                            font-size: 0.9em;
+                        }
                      `}</style>
 
                      <div 
                         ref={resultRef}
-                        className="document-view bg-white shadow-lg my-6 mx-auto p-12 max-w-[210mm] min-h-[297mm]"
-                        dangerouslySetInnerHTML={{ __html: externalResultHtml || `<div class="text-slate-300 text-center mt-32 italic font-sans">Translated output will mimic original layout (images included)...</div>` }}
+                        className="document-view bg-white shadow-xl my-6 mx-auto p-12 max-w-[210mm] min-h-[297mm] transition-all"
+                        dangerouslySetInnerHTML={{ __html: externalResultHtml || `<div class="flex flex-col items-center justify-center h-64 text-slate-400 italic font-sans"><p>Translated document will appear here...</p><p class="text-xs mt-2">Format will mimic professional A4 paper layout.</p></div>` }}
                      />
                 </div>
 
